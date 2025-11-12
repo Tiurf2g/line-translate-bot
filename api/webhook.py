@@ -177,16 +177,15 @@ async def webhook(req: Request):
 
         # 避免源=目標直接平行輸出，仍可選擇翻一次（視你偏好）
         if source_lang == target_lang:
-            line_reply(reply_token, f"🔍 語言判定：{source_lang}\n（目標語言相同，已略過翻譯）")
             continue
 
         try:
             result = translate_text(user_msg, source_lang, target_lang)
             line_reply(
-                reply_token,
-                f"🔍 語言判定：{source_lang}\n🌐 翻譯成 {target_lang}：\n{result}"
+                reply_token
             )
         except Exception as e:
-            line_reply(reply_token, f"⚠️ 翻譯失敗：{e}\n你可輸入：{HELP_TEXT}")
+            line_reply(reply_token, f"翻譯失敗：{e}"")
 
     return {"status": "ok"}
+
