@@ -188,3 +188,4 @@ async def webhook(req: Request):
             line_reply(reply_token, f"翻譯失敗：{e}")
         
         return {"status": "ok"}
+
