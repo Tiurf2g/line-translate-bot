@@ -181,12 +181,10 @@ async def webhook(req: Request):
 
         try:
             result = translate_text(user_msg, source_lang, target_lang)
-            line_reply(
-                reply_token
-            )
+            # ✅ 回傳翻譯結果
+            line_reply(reply_token, result)
         except Exception as e:
-            line_reply(reply_token, f"翻譯失敗：{e}"")
-
-    return {"status": "ok"}
-
-
+            # ⚠️ 若出錯則顯示錯誤訊息
+            line_reply(reply_token, f"翻譯失敗：{e}")
+        
+        return {"status": "ok"}
