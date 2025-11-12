@@ -69,18 +69,14 @@ def detect_language(text: str) -> str:
         return "英文"
 
 def translate_text(text: str, source_lang: str, target_lang: str) -> str:
-    prompt = (
-        f"請將以下文字從「{source_lang}」翻譯成「{target_lang}」。"
-        "保留原意、自然口語，專業名詞請保留原文或加註括號。\n\n"
-        f"文字：\n{text}"
-    )
+    prompt = f"直接將以下內容翻譯成{target_lang}，只輸出翻譯結果：\n{text}"
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "你是專業多語翻譯員"},
+            {"role": "system", "content": "你是翻譯機器，只輸出翻譯結果，不要任何解釋或標註語言。"},
             {"role": "user", "content": prompt},
         ],
-        temperature=0.2
+        temperature=0
     )
     return res.choices[0].message.content.strip()
 
@@ -188,4 +184,5 @@ async def webhook(req: Request):
             line_reply(reply_token, f"翻譯失敗：{e}")
         
         return {"status": "ok"}
+
 
