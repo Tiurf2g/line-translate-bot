@@ -18,7 +18,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 # ================================
-# Upstash REST API 正確版
+# Upstash REST API（最正確版本）
 # ================================
 def kv_get(key: str, default=None):
     try:
@@ -27,21 +27,22 @@ def kv_get(key: str, default=None):
             headers={"Authorization": f"Bearer {KV_TOKEN}"},
             timeout=5
         )
-        data = res.json().get("result")
-        if data:
-            return json.loads(data)
-        return default
+        result = res.json().get("result")
+        if result is None:
+            return default
+        return json.loads(result)
     except:
         return default
 
 
 def kv_set(key: str, value):
+    """Upstash 正確寫法：value 需放在 JSON body，而不是 params"""
     try:
-        json_str = json.dumps(value)
         requests.post(
             f"{KV_URL}/set/{key}",
-            params={"value": json_str},
-            headers={"Authorization": f"Bearer {KV_TOKEN}"},
+            headers={"Authorization": f"Bearer {KV_TOKEN}",
+                     "Content-Type": "application/json"},
+            json={"value": json.dumps(value)},
             timeout=5
         )
     except:
@@ -178,7 +179,12 @@ def line_reply(reply_token, text):
 # =============== webhook 主程式 ===============
 @app.post("/webhook")
 async def webhook(req: Request):
-    body = await req.json()
+    # 🔥 防錯：避免 LINE 停用 webhook
+    try:
+        body = await req.json()
+    except:
+        return {"status": "ok"}
+
     events = body.get("events", [])
 
     settings = load_settings()
@@ -209,7 +215,7 @@ async def webhook(req: Request):
 
         cfg = settings[key]
 
-        # ===== 指令處理 =====
+        # ===== 指令區 =====
         if msg_lower == "/help":
             line_reply(reply_token, "📘 指令清單：\n/set\n/status\n/on\n/off\n/reset\n/tone\n/smart\n/langlist\n/clearcache")
             continue
@@ -281,7 +287,7 @@ async def webhook(req: Request):
             line_reply(reply_token, "♻️ 已重設為中文")
             continue
 
-        # ===== 自動翻譯 =====
+        # =============== 自動翻譯 ===============
         if cfg["enabled"]:
             detected = detect_language(user_msg, cache)
 
