@@ -18,7 +18,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 # ================================
-# Upstash REST API（正確格式）
+# Upstash REST API（含防呆）
 # ================================
 def kv_get(key: str, default=None):
     try:
@@ -27,22 +27,26 @@ def kv_get(key: str, default=None):
             headers={"Authorization": f"Bearer {KV_TOKEN}"},
             timeout=5
         )
-
         raw = res.json().get("result")
 
         if not raw:
             return default
 
-        # Upstash 有兩種格式：字串 or dict
-        # 1) {"result": "...."}  ← 舊格式
-        # 2) {"result": {"data": "...", "error": null}} ← 新格式
+        # 格式 1: {"result": "..."} ← raw = 字串
+        # 格式 2: {"result": {"data": "...", ...}}
         if isinstance(raw, dict):
             raw = raw.get("data")
 
         if not raw:
             return default
 
-        return json.loads(raw)
+        data = json.loads(raw)
+
+        # Upstash 偶爾會「把 dict 存成字串」→ 導致壞掉
+        if not isinstance(data, dict):
+            return default
+
+        return data
 
     except Exception:
         return default
@@ -63,9 +67,10 @@ def kv_set(key: str, value):
         pass
 
 
-# =============== Settings/Cache ===============
+# =============== Settings/Cache，加入防呆 ===============
 def load_settings():
-    return kv_get(SETTINGS_KEY, {})
+    data = kv_get(SETTINGS_KEY, {})
+    return data if isinstance(data, dict) else {}
 
 
 def save_settings(data):
@@ -73,11 +78,12 @@ def save_settings(data):
 
 
 def load_cache():
-    return kv_get(CACHE_KEY, {})
+    data = kv_get(CACHE_KEY, {})
+    return data if isinstance(data, dict) else {}
 
 
-def save_cache(cache):
-    kv_set(CACHE_KEY, cache)
+def save_cache(data):
+    kv_set(CACHE_KEY, data)
 
 
 # =============== 語言正規化 ===============
@@ -110,8 +116,8 @@ def detect_language(text: str, cache):
         return cache[cache_key]
 
     prompt = (
-        "請判斷以下句子的語言種類，僅回答：中文 / 英文 / 越南文 / 日文 / 韓文 / 印尼文 / 泰文 / 西班牙文 / 德文。\n"
-        "若無法判斷，回英文。\n\n"
+        "請判斷以下句子的語言種類，僅回答：中文 / 英文 / 越南文 / 日文 / 韓文 / "
+        "印尼文 / 泰文 / 西班牙文 / 德文。若無法判斷，回英文。\n\n"
         f"句子：{text}"
     )
 
@@ -151,8 +157,7 @@ def translate_text(text, source_lang, target_lang, cache, tone="normal"):
 
     prompt = (
         f"請將以下內容翻譯成 {style}，語氣：{tone_map[tone]}\n"
-        f"若已是目標語言，請直接輸出原文。\n\n"
-        f"內容：\n{text}"
+        f"若已是目標語言，請直接輸出原文。\n\n{text}"
     )
 
     res = client.chat.completions.create(
@@ -166,7 +171,7 @@ def translate_text(text, source_lang, target_lang, cache, tone="normal"):
 
     result = res.choices[0].message.content.strip()
 
-    # 繁體化修正
+    # 轉繁體（補強 OpenAI 偶爾出簡體）
     if "中" in target_lang:
         trad = {
             "这": "這", "着": "著", "么": "麼", "为": "為", "于": "於",
@@ -177,7 +182,6 @@ def translate_text(text, source_lang, target_lang, cache, tone="normal"):
 
     cache[cache_key] = result
     save_cache(cache)
-
     return result
 
 
@@ -203,7 +207,6 @@ async def webhook(req: Request):
         return {"status": "ok"}
 
     events = body.get("events", [])
-
     settings = load_settings()
     cache = load_cache()
 
@@ -221,7 +224,8 @@ async def webhook(req: Request):
         user_id = ev.get("source", {}).get("userId")
         key = f"user:{user_id}"
 
-        if key not in settings:
+        # 初始化設定（保證不會壞掉）
+        if key not in settings or not isinstance(settings[key], dict):
             settings[key] = {
                 "enabled": True,
                 "target": "中文",
@@ -231,19 +235,23 @@ async def webhook(req: Request):
 
         cfg = settings[key]
 
-        # ===== 指令區 =====
+        # ===== 指令 =====
         if msg_lower == "/help":
             line_reply(reply_token,
-                       "📘 指令清單：\n/set\n/status\n/on\n/off\n/reset\n/tone\n/smart\n/langlist\n/clearcache")
+                "📘 指令：\n"
+                "/set 語言\n/status\n/on\n/off\n/reset\n"
+                "/tone 語氣\n/smart on/off\n"
+                "/langlist\n/clearcache"
+            )
             continue
 
         if msg_lower == "/clearcache":
             save_cache({})
-            line_reply(reply_token, "🔄 快取已清除")
+            line_reply(reply_token, "🔄 Cache 已清除")
             continue
 
         if msg_lower == "/langlist":
-            line_reply(reply_token, "🌐 支援：中文、英文、越南文、日文、韓文、印尼文、泰文、西班牙文、德文")
+            line_reply(reply_token, "🌐 支援語言：中文、英文、越南文、日文、韓文、印尼文、泰文、西班牙文、德文")
             continue
 
         if msg_lower.startswith("/tone "):
@@ -251,7 +259,7 @@ async def webhook(req: Request):
             if t in ["normal", "formal", "casual"]:
                 cfg["tone"] = t
                 save_settings(settings)
-                line_reply(reply_token, f"🎙️ 已設定語氣：{t}")
+                line_reply(reply_token, f"🎙️ 語氣已改為：{t}")
             continue
 
         if msg_lower == "/smart on":
@@ -271,13 +279,15 @@ async def webhook(req: Request):
             cfg["target"] = lang
             cfg["enabled"] = True
             save_settings(settings)
-            line_reply(reply_token, f"✅ 已設定：翻譯成 {lang}")
+            line_reply(reply_token, f"✅ 設定成功 → 翻譯成 {lang}")
             continue
 
         if msg_lower == "/status":
-            line_reply(
-                reply_token,
-                f"🔧 設定：\n狀態：{'ON' if cfg['enabled'] else 'OFF'}\n語言：{cfg['target']}\n語氣：{cfg['tone']}\nSmart：{'ON' if cfg['smart'] else 'OFF'}"
+            line_reply(reply_token,
+                f"🔧 狀態：{'ON' if cfg['enabled'] else 'OFF'}\n"
+                f"🌐 語言：{cfg['target']}\n"
+                f"🎙️ 語氣：{cfg['tone']}\n"
+                f"🤖 Smart：{'ON' if cfg['smart'] else 'OFF'}"
             )
             continue
 
@@ -301,7 +311,7 @@ async def webhook(req: Request):
                 "smart": False,
             }
             save_settings(settings)
-            line_reply(reply_token, "♻️ 已重設為中文")
+            line_reply(reply_token, "♻️ 已重設（中文、普通語氣）")
             continue
 
         # =============== 自動翻譯 ===============
@@ -315,8 +325,9 @@ async def webhook(req: Request):
             )
 
             if detected != target:
-                result = translate_text(user_msg, detected, target, cache, tone=cfg["tone"])
+                result = translate_text(
+                    user_msg, detected, target, cache, tone=cfg["tone"]
+                )
                 line_reply(reply_token, result)
 
     return {"status": "ok"}
-
