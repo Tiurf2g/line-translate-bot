@@ -18,7 +18,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 # ================================
-# Upstash REST API（最正確版本）
+# Upstash REST API（正確格式）
 # ================================
 def kv_get(key: str, default=None):
     try:
@@ -27,21 +27,35 @@ def kv_get(key: str, default=None):
             headers={"Authorization": f"Bearer {KV_TOKEN}"},
             timeout=5
         )
-        result = res.json().get("result")
-        if result is None:
+
+        raw = res.json().get("result")
+
+        if not raw:
             return default
-        return json.loads(result)
-    except:
+
+        # Upstash 有兩種格式：字串 or dict
+        # 1) {"result": "...."}  ← 舊格式
+        # 2) {"result": {"data": "...", "error": null}} ← 新格式
+        if isinstance(raw, dict):
+            raw = raw.get("data")
+
+        if not raw:
+            return default
+
+        return json.loads(raw)
+
+    except Exception:
         return default
 
 
 def kv_set(key: str, value):
-    """Upstash 正確寫法：value 需放在 JSON body，而不是 params"""
     try:
         requests.post(
             f"{KV_URL}/set/{key}",
-            headers={"Authorization": f"Bearer {KV_TOKEN}",
-                     "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {KV_TOKEN}",
+                "Content-Type": "application/json"
+            },
             json={"value": json.dumps(value)},
             timeout=5
         )
@@ -91,6 +105,7 @@ def normalize_lang(name: str) -> str:
 # =============== 語言偵測 ===============
 def detect_language(text: str, cache):
     cache_key = f"detect::{text}"
+
     if cache_key in cache:
         return cache[cache_key]
 
@@ -109,10 +124,12 @@ def detect_language(text: str, cache):
             ],
             temperature=0
         )
+
         lang = normalize_lang(res.choices[0].message.content.strip())
         cache[cache_key] = lang
         save_cache(cache)
         return lang
+
     except:
         return "英文"
 
@@ -120,6 +137,7 @@ def detect_language(text: str, cache):
 # =============== 翻譯功能 ===============
 def translate_text(text, source_lang, target_lang, cache, tone="normal"):
     cache_key = f"trans::{source_lang}->{target_lang}::{tone}::{text}"
+
     if cache_key in cache:
         return cache[cache_key]
 
@@ -179,7 +197,6 @@ def line_reply(reply_token, text):
 # =============== webhook 主程式 ===============
 @app.post("/webhook")
 async def webhook(req: Request):
-    # 🔥 防錯：避免 LINE 停用 webhook
     try:
         body = await req.json()
     except:
@@ -204,7 +221,6 @@ async def webhook(req: Request):
         user_id = ev.get("source", {}).get("userId")
         key = f"user:{user_id}"
 
-        # 預設設定
         if key not in settings:
             settings[key] = {
                 "enabled": True,
@@ -217,7 +233,8 @@ async def webhook(req: Request):
 
         # ===== 指令區 =====
         if msg_lower == "/help":
-            line_reply(reply_token, "📘 指令清單：\n/set\n/status\n/on\n/off\n/reset\n/tone\n/smart\n/langlist\n/clearcache")
+            line_reply(reply_token,
+                       "📘 指令清單：\n/set\n/status\n/on\n/off\n/reset\n/tone\n/smart\n/langlist\n/clearcache")
             continue
 
         if msg_lower == "/clearcache":
