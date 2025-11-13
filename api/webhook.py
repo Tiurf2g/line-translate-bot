@@ -195,7 +195,7 @@ def line_reply(reply_token, text):
 
 
 # =============== webhook 主程式 ===============
-@app.post("/webhook")
+@app.post("/api/webhook")
 async def webhook(req: Request):
     try:
         body = await req.json()
@@ -319,3 +319,4 @@ async def webhook(req: Request):
                 line_reply(reply_token, result)
 
     return {"status": "ok"}
+
