@@ -32,8 +32,6 @@ def kv_get(key: str, default=None):
         if not raw:
             return default
 
-        # 格式 1: {"result": "..."} ← raw = 字串
-        # 格式 2: {"result": {"data": "...", ...}}
         if isinstance(raw, dict):
             raw = raw.get("data")
 
@@ -42,7 +40,6 @@ def kv_get(key: str, default=None):
 
         data = json.loads(raw)
 
-        # Upstash 偶爾會「把 dict 存成字串」→ 導致壞掉
         if not isinstance(data, dict):
             return default
 
@@ -67,7 +64,7 @@ def kv_set(key: str, value):
         pass
 
 
-# =============== Settings/Cache，加入防呆 ===============
+# =============== Settings/Cache ===============
 def load_settings():
     data = kv_get(SETTINGS_KEY, {})
     return data if isinstance(data, dict) else {}
@@ -171,7 +168,7 @@ def translate_text(text, source_lang, target_lang, cache, tone="normal"):
 
     result = res.choices[0].message.content.strip()
 
-    # 轉繁體（補強 OpenAI 偶爾出簡體）
+    # 簡體 → 繁體（補強 OpenAI）
     if "中" in target_lang:
         trad = {
             "这": "這", "着": "著", "么": "麼", "为": "為", "于": "於",
@@ -198,6 +195,26 @@ def line_reply(reply_token, text):
     requests.post(LINE_REPLY_API, headers=headers, json=body)
 
 
+# ================================
+# 🍀 這裡是原本壞掉的地方 → 重大修正
+# ================================
+def get_source_key(ev):
+    source = ev.get("source", {})
+
+    stype = source.get("type")
+
+    if stype == "user":
+        return f"user:{source.get('userId')}"
+
+    if stype == "group":
+        return f"group:{source.get('groupId')}"
+
+    if stype == "room":
+        return f"room:{source.get('roomId')}"
+
+    return "unknown"
+
+
 # =============== webhook 主程式 ===============
 @app.post("/api/webhook")
 async def webhook(req: Request):
@@ -207,6 +224,7 @@ async def webhook(req: Request):
         return {"status": "ok"}
 
     events = body.get("events", [])
+
     settings = load_settings()
     cache = load_cache()
 
@@ -221,10 +239,11 @@ async def webhook(req: Request):
         user_msg = msg.get("text", "").strip()
         msg_lower = user_msg.lower()
         reply_token = ev.get("replyToken")
-        user_id = ev.get("source", {}).get("userId")
-        key = f"user:{user_id}"
 
-        # 初始化設定（保證不會壞掉）
+        # ★★★ 修改後：會正確抓 user/group/room
+        key = get_source_key(ev)
+
+        # 初始化設定
         if key not in settings or not isinstance(settings[key], dict):
             settings[key] = {
                 "enabled": True,
@@ -235,7 +254,7 @@ async def webhook(req: Request):
 
         cfg = settings[key]
 
-        # ===== 指令 =====
+        # ===== 指令處理 =====
         if msg_lower == "/help":
             line_reply(reply_token,
                 "📘 指令：\n"
