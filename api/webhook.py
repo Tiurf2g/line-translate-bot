@@ -87,7 +87,7 @@ def detect_language(text: str, cache):
     except Exception:
         return "英文"
 
-# === 翻譯（含 Tone + SMART + Cache） ===
+# === 翻譯（含 Tone + Smart + Cache） ===
 def translate_text(text: str, source_lang: str, target_lang: str, cache, tone="normal"):
     cache_key = f"trans::{source_lang}->{target_lang}::{tone}::{text}"
     if cache_key in cache:
@@ -99,19 +99,20 @@ def translate_text(text: str, source_lang: str, target_lang: str, cache, tone="n
         "normal": "自然流暢、口語化但保持禮貌。",
         "formal": "正式、書面化、精準。",
         "casual": "輕鬆口語、朋友聊天語氣。"
-    }.get(tone, "自然流暢")
+    }.get(tone, "自然流暢、口語化但保持禮貌。")
 
     prompt = (
-        f"請將以下內容翻譯成 {style}，語氣風格：{tone_prompt}。\n"
+        f"請將以下內容翻譯成 {style}，語氣風格：{tone_prompt}\n"
         f"- 若為越南語，請根據語境判斷稱謂（如 con, anh, em）。\n"
-        f"- 若原文已是目標語言，請直接回覆原文。\n\n"
+        f"- 若原文已是目標語言，請直接回覆原文。\n"
+        f"- 只輸出翻譯結果，不要附註說明。\n\n"
         f"原文：\n{text}"
     )
 
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": f"你是專業翻譯員。"},
+            {"role": "system", "content": "你是專業翻譯員。"},
             {"role": "user", "content": prompt},
         ],
         temperature=0.3
@@ -146,7 +147,7 @@ def line_reply(reply_token: str, text: str):
     }
     requests.post(LINE_REPLY_API, headers=headers, json=payload)
 
-# === 主 webhook ===
+# === webhook ===
 @app.post("/webhook")
 async def webhook(req: Request):
     body = await req.json()
@@ -161,12 +162,12 @@ async def webhook(req: Request):
         if msg.get("type") != "text":
             continue
 
-        user_msg = msg.get("text", "").strip()
+        user_msg = msg.get("text", "")
+        user_msg = user_msg.strip()
         msg_lower = user_msg.lower()
         reply_token = ev.get("replyToken")
         user_id = ev.get("source", {}).get("userId", "anonymous")
 
-        # === 初始化使用者設定 ===
         key = f"user:{user_id}"
         if key not in settings:
             settings[key] = {
@@ -177,27 +178,31 @@ async def webhook(req: Request):
             }
 
         cfg = settings[key]
+        # 避免舊設定檔缺欄位
+        cfg.setdefault("enabled", True)
+        cfg.setdefault("target", "中文")
+        cfg.setdefault("tone", "normal")
+        cfg.setdefault("smart", False)
 
-        # ========== 指令區 ==========
+        # ========= 指令區 =========
 
-        # /help（智能版）
-        clean = re.sub(r"[^\w\u4e00-\u9fff]", "", msg_lower).strip()
-        if clean in ["help", "幫助", "指令"]:
+        # /help
+        if msg_lower == "/help" or user_msg in ["help", "幫助", "指令"]:
             help_text = (
                 "📘 ChatGPT 翻譯機器人 – 指令說明\n\n"
                 "🧍‍♂️【個人翻譯設定】\n"
-                "/set 語言     – 設定翻譯語言\n"
+                "/set 語言     – 設定翻譯語言（例如：/set 中文）\n"
                 "/status       – 查看目前設定\n"
-                "/on           – 開啟翻譯\n"
-                "/off          – 關閉翻譯\n"
-                "/reset        – 重設為中文翻譯\n\n"
+                "/on           – 開啟自動翻譯\n"
+                "/off          – 關閉自動翻譯\n"
+                "/reset        – 重設為翻譯成中文\n\n"
                 "🎭【語氣 Tone】\n"
                 "/tone normal  – 一般自然語氣\n"
                 "/tone formal  – 正式書面語\n"
                 "/tone casual  – 朋友聊天語氣\n\n"
                 "🤖【Smart 智慧翻譯】\n"
-                "/smart on     – 自動判斷語言方向\n"
-                "/smart off    – 使用固定語言\n\n"
+                "/smart on     – 自動判斷翻譯方向（中↔越優先）\n"
+                "/smart off    – 使用固定語言（/set 設定）\n\n"
                 "🧹【快取管理】\n"
                 "/clearcache   – 清除翻譯快取\n\n"
                 "🌐【語言列表】\n"
@@ -222,9 +227,9 @@ async def webhook(req: Request):
             line_reply(reply_token, lang_list)
             continue
 
-        # /tone
+        # /tone xxx
         if msg_lower.startswith("/tone "):
-            tone = msg_lower.replace("/tone", "").strip()
+            tone = msg_lower.replace("/tone", "", 1).strip()
             if tone not in ["normal", "formal", "casual"]:
                 line_reply(reply_token, "🎭 語氣請選：normal / formal / casual")
                 continue
@@ -233,7 +238,7 @@ async def webhook(req: Request):
             line_reply(reply_token, f"🎙️ 已設定語氣為：{tone}")
             continue
 
-        # Smart 開關
+        # /smart on/off
         if msg_lower == "/smart on":
             cfg["smart"] = True
             save_settings(settings)
@@ -245,17 +250,21 @@ async def webhook(req: Request):
             line_reply(reply_token, "🧩 Smart 模式已關閉。")
             continue
 
-        # 基本指令
+        # /set 語言 or 設定翻譯 xxx
         if msg_lower.startswith("/set ") or user_msg.startswith("設定翻譯 "):
             parts = user_msg.split()
-            lang = normalize_lang(parts[-1])
-            cfg["enabled"] = True
-            cfg["target"] = lang
-            save_settings(settings)
-            line_reply(reply_token, f"✅ 已設定：翻譯成「{lang}」。")
+            if len(parts) >= 2:
+                lang = normalize_lang(parts[-1])
+                cfg["enabled"] = True
+                cfg["target"] = lang
+                save_settings(settings)
+                line_reply(reply_token, f"✅ 已設定：翻譯成「{lang}」。")
+            else:
+                line_reply(reply_token, "請用格式：/set 中文 或 /set 越南文")
             continue
 
-        if msg_lower == "/status":
+        # /status
+        if msg_lower == "/status" or user_msg == "查翻譯":
             st = (
                 f"🔧 個人設定\n"
                 f"狀態：{'開啟' if cfg['enabled'] else '關閉'}\n"
@@ -266,19 +275,22 @@ async def webhook(req: Request):
             line_reply(reply_token, st)
             continue
 
-        if msg_lower == "/off":
+        # /off
+        if msg_lower == "/off" or user_msg == "停止翻譯":
             cfg["enabled"] = False
             save_settings(settings)
             line_reply(reply_token, "⏸️ 翻譯已關閉。")
             continue
 
-        if msg_lower == "/on":
+        # /on
+        if msg_lower == "/on" or user_msg == "開啟翻譯":
             cfg["enabled"] = True
             save_settings(settings)
             line_reply(reply_token, "▶️ 翻譯已開啟。")
             continue
 
-        if msg_lower == "/reset":
+        # /reset
+        if msg_lower == "/reset" or user_msg == "重設翻譯":
             settings[key] = {
                 "enabled": True,
                 "target": "中文",
@@ -289,21 +301,18 @@ async def webhook(req: Request):
             line_reply(reply_token, "♻️ 已重設為翻譯成中文。")
             continue
 
-        # ========== 自動翻譯邏輯 ==========
+        # ========= 自動翻譯 =========
         if cfg.get("enabled", True):
-
             detected = detect_language(user_msg, cache)
 
-            # SMART 模式：自動方向
+            # Smart 模式：自動決定目標語言（中↔越優先）
             if cfg.get("smart", False):
-
                 if detected == "中文":
                     target = "越南文"
                 elif detected == "越南文":
                     target = "中文"
                 else:
-                    target = cfg["target"]   # 其他語言維持原本 target
-
+                    target = cfg["target"]
             else:
                 target = cfg["target"]
 
