@@ -8,37 +8,54 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
 
-SETTINGS_FILE = "/tmp/user_settings.json"
-CACHE_FILE = "/tmp/translate_cache.json"
+# === Upstash KV (Redis) ===
+KV_URL = os.getenv("KV_REST_API_URL")
+KV_TOKEN = os.getenv("KV_REST_API_TOKEN")
+
+SETTINGS_KEY = "translator_settings"
+CACHE_KEY = "translator_cache"
+
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# === 快取讀寫 ===
-def load_cache():
-    if not os.path.exists(CACHE_FILE):
-        return {}
+# === Upstash KV 基礎函式 ===
+def kv_get(key: str, default=None):
     try:
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        res = requests.get(
+            f"{KV_URL}/get/{key}",
+            headers={"Authorization": f"Bearer {KV_TOKEN}"},
+            timeout=5
+        )
+        if res.status_code == 200:
+            data = res.json().get("result")
+            if data:
+                return json.loads(data)
+        return default
     except:
-        return {}
+        return default
 
-def save_cache(cache):
-    with open(CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2)
+def kv_set(key: str, value):
+    try:
+        requests.post(
+            f"{KV_URL}/set/{key}",
+            headers={"Authorization": f"Bearer {KV_TOKEN}"},
+            json=json.dumps(value),
+            timeout=5
+        )
+    except:
+        pass
 
-# === 設定讀寫 ===
+# === 改寫：設定與快取全部存在 Redis ===
 def load_settings():
-    if not os.path.exists(SETTINGS_FILE):
-        return {}
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return {}
+    return kv_get(SETTINGS_KEY, {})
 
 def save_settings(data):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    kv_set(SETTINGS_KEY, data)
+
+def load_cache():
+    return kv_get(CACHE_KEY, {})
+
+def save_cache(cache):
+    kv_set(CACHE_KEY, cache)
 
 # === 語言正規化 ===
 LANG_ALIASES = {
@@ -70,6 +87,7 @@ def detect_language(text: str, cache):
         "請判斷以下句子的語言種類，僅回「中文、英文、越南文、日文、韓文、印尼文、泰文、西班牙文、德文」之一；"
         "若不屬於以上，請回「英文」。\n\n句子：\n" + text
     )
+
     try:
         res = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -83,8 +101,7 @@ def detect_language(text: str, cache):
         cache[cache_key] = lang
         save_cache(cache)
         return lang
-
-    except Exception:
+    except:
         return "英文"
 
 # === 翻譯（含 Tone + Smart + Cache） ===
@@ -120,19 +137,20 @@ def translate_text(text: str, source_lang: str, target_lang: str, cache, tone="n
 
     result = res.choices[0].message.content.strip()
 
-    # 繁體化
+    # 繁體化修正
     if "中" in target_lang:
-        replacements = {
+        trad = {
             "这": "這", "着": "著", "么": "麼", "为": "為", "于": "於",
             "觉": "覺", "听": "聽", "关": "關", "头": "頭", "电": "電",
             "间": "間", "对": "對", "会": "會", "还": "還", "时": "時",
             "后": "後", "国": "國", "两": "兩"
         }
-        for k, v in replacements.items():
+        for k, v in trad.items():
             result = result.replace(k, v)
 
     cache[cache_key] = result
     save_cache(cache)
+
     return result
 
 # === LINE 回覆 ===
@@ -147,28 +165,31 @@ def line_reply(reply_token: str, text: str):
     }
     requests.post(LINE_REPLY_API, headers=headers, json=payload)
 
-# === webhook ===
+# === webhook 主程式 ===
 @app.post("/webhook")
 async def webhook(req: Request):
     body = await req.json()
     events = body.get("events", [])
+
     settings = load_settings()
     cache = load_cache()
 
     for ev in events:
         if ev.get("type") != "message":
             continue
+
         msg = ev.get("message", {})
         if msg.get("type") != "text":
             continue
 
-        user_msg = msg.get("text", "")
-        user_msg = user_msg.strip()
+        user_msg = msg.get("text", "").strip()
         msg_lower = user_msg.lower()
         reply_token = ev.get("replyToken")
-        user_id = ev.get("source", {}).get("userId", "anonymous")
+        user_id = ev.get("source", {}).get("userId")
 
         key = f"user:{user_id}"
+
+        # 初始設定
         if key not in settings:
             settings[key] = {
                 "enabled": True,
@@ -178,31 +199,21 @@ async def webhook(req: Request):
             }
 
         cfg = settings[key]
-        # 避免舊設定檔缺欄位
-        cfg.setdefault("enabled", True)
-        cfg.setdefault("target", "中文")
-        cfg.setdefault("tone", "normal")
-        cfg.setdefault("smart", False)
 
-        # ========= 指令區 =========
-
-        # /help
-        if msg_lower == "/help" or user_msg in ["help", "幫助", "指令"]:
+        # 指令：/help
+        if msg_lower == "/help":
             help_text = (
                 "📘 ChatGPT 翻譯機器人 – 指令說明\n\n"
                 "🧍‍♂️【個人翻譯設定】\n"
-                "/set 語言     – 設定翻譯語言（例如：/set 中文）\n"
+                "/set 語言     – 設定翻譯語言\n"
                 "/status       – 查看目前設定\n"
-                "/on           – 開啟自動翻譯\n"
-                "/off          – 關閉自動翻譯\n"
-                "/reset        – 重設為翻譯成中文\n\n"
+                "/on /off      – 開啟或關閉翻譯\n"
+                "/reset        – 重設為中文\n\n"
                 "🎭【語氣 Tone】\n"
-                "/tone normal  – 一般自然語氣\n"
-                "/tone formal  – 正式書面語\n"
-                "/tone casual  – 朋友聊天語氣\n\n"
+                "/tone normal / formal / casual\n\n"
                 "🤖【Smart 智慧翻譯】\n"
-                "/smart on     – 自動判斷翻譯方向（中↔越優先）\n"
-                "/smart off    – 使用固定語言（/set 設定）\n\n"
+                "/smart on     – 中↔越自動判斷\n"
+                "/smart off    – 使用固定語言\n\n"
                 "🧹【快取管理】\n"
                 "/clearcache   – 清除翻譯快取\n\n"
                 "🌐【語言列表】\n"
@@ -214,57 +225,50 @@ async def webhook(req: Request):
         # /clearcache
         if msg_lower == "/clearcache":
             save_cache({})
-            line_reply(reply_token, "🔄 翻譯快取已清除。")
+            line_reply(reply_token, "🔄 快取已清除")
             continue
 
         # /langlist
         if msg_lower == "/langlist":
-            lang_list = (
-                "🌐 支援語言列表：\n"
-                "中文（zh）\n英文（en）\n越南文（vi）\n日文（ja）\n"
-                "韓文（ko）\n印尼文（id）\n泰文（th）\n西班牙文（es）\n德文（de）"
-            )
+            lang_list = "🌐 支援語言：中文、英文、越南文、日文、韓文、印尼文、泰文、西班牙文、德文"
             line_reply(reply_token, lang_list)
             continue
 
-        # /tone xxx
+        # /tone
         if msg_lower.startswith("/tone "):
-            tone = msg_lower.replace("/tone", "", 1).strip()
-            if tone not in ["normal", "formal", "casual"]:
-                line_reply(reply_token, "🎭 語氣請選：normal / formal / casual")
-                continue
-            cfg["tone"] = tone
-            save_settings(settings)
-            line_reply(reply_token, f"🎙️ 已設定語氣為：{tone}")
+            t = msg_lower.split(" ", 1)[1]
+            if t in ["normal", "formal", "casual"]:
+                cfg["tone"] = t
+                save_settings(settings)
+                line_reply(reply_token, f"🎙️ 已設定語氣：{t}")
+            else:
+                line_reply(reply_token, "可選：normal / formal / casual")
             continue
 
-        # /smart on/off
+        # smart 模式
         if msg_lower == "/smart on":
             cfg["smart"] = True
             save_settings(settings)
-            line_reply(reply_token, "🤖 Smart 智慧模式已啟用。")
+            line_reply(reply_token, "🤖 Smart 模式已啟用")
             continue
+
         if msg_lower == "/smart off":
             cfg["smart"] = False
             save_settings(settings)
-            line_reply(reply_token, "🧩 Smart 模式已關閉。")
+            line_reply(reply_token, "🧩 Smart 模式已關閉")
             continue
 
-        # /set 語言 or 設定翻譯 xxx
-        if msg_lower.startswith("/set ") or user_msg.startswith("設定翻譯 "):
-            parts = user_msg.split()
-            if len(parts) >= 2:
-                lang = normalize_lang(parts[-1])
-                cfg["enabled"] = True
-                cfg["target"] = lang
-                save_settings(settings)
-                line_reply(reply_token, f"✅ 已設定：翻譯成「{lang}」。")
-            else:
-                line_reply(reply_token, "請用格式：/set 中文 或 /set 越南文")
+        # /set 目標語言
+        if msg_lower.startswith("/set "):
+            lang = normalize_lang(msg_lower.replace("/set", "").strip())
+            cfg["target"] = lang
+            cfg["enabled"] = True
+            save_settings(settings)
+            line_reply(reply_token, f"✅ 已設定：翻譯成 {lang}")
             continue
 
         # /status
-        if msg_lower == "/status" or user_msg == "查翻譯":
+        if msg_lower == "/status":
             st = (
                 f"🔧 個人設定\n"
                 f"狀態：{'開啟' if cfg['enabled'] else '關閉'}\n"
@@ -275,22 +279,20 @@ async def webhook(req: Request):
             line_reply(reply_token, st)
             continue
 
-        # /off
-        if msg_lower == "/off" or user_msg == "停止翻譯":
+        # on/off/reset
+        if msg_lower == "/off":
             cfg["enabled"] = False
             save_settings(settings)
-            line_reply(reply_token, "⏸️ 翻譯已關閉。")
+            line_reply(reply_token, "⏸️ 翻譯已關閉")
             continue
 
-        # /on
-        if msg_lower == "/on" or user_msg == "開啟翻譯":
+        if msg_lower == "/on":
             cfg["enabled"] = True
             save_settings(settings)
-            line_reply(reply_token, "▶️ 翻譯已開啟。")
+            line_reply(reply_token, "▶️ 翻譯已開啟")
             continue
 
-        # /reset
-        if msg_lower == "/reset" or user_msg == "重設翻譯":
+        if msg_lower == "/reset":
             settings[key] = {
                 "enabled": True,
                 "target": "中文",
@@ -298,15 +300,14 @@ async def webhook(req: Request):
                 "smart": False
             }
             save_settings(settings)
-            line_reply(reply_token, "♻️ 已重設為翻譯成中文。")
+            line_reply(reply_token, "♻️ 已重設為中文")
             continue
 
-        # ========= 自動翻譯 =========
+        # 自動翻譯
         if cfg.get("enabled", True):
             detected = detect_language(user_msg, cache)
 
-            # Smart 模式：自動決定目標語言（中↔越優先）
-            if cfg.get("smart", False):
+            if cfg["smart"]:
                 if detected == "中文":
                     target = "越南文"
                 elif detected == "越南文":
@@ -317,9 +318,7 @@ async def webhook(req: Request):
                 target = cfg["target"]
 
             if detected != target:
-                result = translate_text(
-                    user_msg, detected, target, cache, tone=cfg.get("tone", "normal")
-                )
+                result = translate_text(user_msg, detected, target, cache, tone=cfg["tone"])
                 line_reply(reply_token, result)
 
     return {"status": "ok"}
