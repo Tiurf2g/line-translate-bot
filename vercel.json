@@ -3,7 +3,7 @@
     "api/**/*.py": { "runtime": "python3.11" }
   },
   "routes": [
-    { "src": "^/webhook$", "dest": "/api/webhook.py" },
-    { "src": "^/healthz$", "dest": "/api/webhook.py" }
+    { "src": "/webhook", "dest": "/api/webhook.py" },
+    { "src": "/healthz", "dest": "/api/webhook.py" }
   ]
 }
