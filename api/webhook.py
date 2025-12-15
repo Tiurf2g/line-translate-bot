@@ -51,7 +51,7 @@ def reply_line(reply_token: str, text: str):
     if r.status_code != 200:
         print("❌ LINE reply failed:", r.status_code, r.text)
 
-def translate_family(text: str) -> str:
+def translate_family(text: str, event: dict) -> str:
     text = (text or "").strip()
     if not text:
         return ""
@@ -60,11 +60,11 @@ def translate_family(text: str) -> str:
     if text.startswith("🇹🇼") or text.startswith("🇻🇳"):
         return ""
 
-    # 🔴 非家庭語氣 → 直翻
-    if is_non_family(text):
+    # 🔴 非家庭 → 直翻
+    if is_non_family(event):
         system = DIRECT_TRANSLATE_PROMPT
     else:
-        # 家庭語氣維持原邏輯
+        # 家庭模式才用生活化
         if is_vietnamese(text):
             system = VN_TO_TW_PROMPT
         else:
@@ -79,7 +79,7 @@ def translate_family(text: str) -> str:
             {"role": "system", "content": system},
             {"role": "user", "content": text},
         ],
-        temperature=0.2,   # 直翻建議低一點
+        temperature=0.2,
         max_tokens=180,
     )
 
@@ -123,7 +123,7 @@ async def webhook(request: Request):
 
             reply_token = ev.get("replyToken")
             original = msg.get("text", "")
-            translated = translate_family(original)
+            translated = translate_family(original, ev)
 
             # ✅ curl 測試模式：直接回結果
             if reply_token == "TEST_TOKEN":
