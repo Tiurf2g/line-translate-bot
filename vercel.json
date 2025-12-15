@@ -1,5 +1,8 @@
+// vercel.json
 {
   "functions": { "api/**/*.py": { "runtime": "python3.11" } },
-  "builds": [{ "src": "api/webhook.py", "use": "@vercel/python" }],
-  "routes": [{ "src": "/(.*)", "dest": "api/webhook.py" }]
+  "routes": [
+    { "src": "/webhook", "dest": "api/webhook.py" },
+    { "src": "/healthz", "dest": "api/webhook.py" }
+  ]
 }
