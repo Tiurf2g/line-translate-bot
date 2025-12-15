@@ -39,6 +39,9 @@ def verify_line_signature(body: bytes, signature: str) -> bool:
 
 
 def reply_line(reply_token: str, text: str):
+    if not LINE_CHANNEL_ACCESS_TOKEN:
+        print("❌ Missing LINE_CHANNEL_ACCESS_TOKEN")
+        return
     headers = {
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
         "Content-Type": "application/json",
@@ -68,7 +71,6 @@ def translate_family(text: str) -> str:
     if not OPENAI_API_KEY:
         return prefix + "(OPENAI_API_KEY 沒設定)"
 
-    # ✅ 最穩：chat.completions（相容性最好）
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -82,11 +84,13 @@ def translate_family(text: str) -> str:
     return prefix + out if out else ""
 
 
+# ✅ 這支 function 在 Vercel 可能會收到 path = "/" 或 "/api/webhook"
 @app.get("/")
-def root():
+@app.get("/api/webhook")
+def alive():
     return {
         "ok": True,
-        "msg": "LINE webhook alive",
+        "msg": "webhook alive",
         "openai_key_loaded": bool(OPENAI_API_KEY),
         "line_token_loaded": bool(LINE_CHANNEL_ACCESS_TOKEN),
         "secret_loaded": bool(LINE_CHANNEL_SECRET),
@@ -94,12 +98,12 @@ def root():
 
 
 @app.post("/")
+@app.post("/api/webhook")
 async def webhook(request: Request):
     try:
         body = await request.body()
         signature = request.headers.get("x-line-signature", "")
 
-        # 驗簽失敗也回 200（避免 LINE 重打）
         if not verify_line_signature(body, signature):
             print("⚠️ Invalid signature (ignored)")
 
@@ -118,10 +122,9 @@ async def webhook(request: Request):
 
             reply_token = ev.get("replyToken")
             original = msg.get("text", "")
-
             translated = translate_family(original)
 
-            # ✅ curl 測試：直接回翻譯結果
+            # ✅ curl 測試模式：直接回結果
             if reply_token == "TEST_TOKEN":
                 return {"ok": True, "input": original.strip(), "translated": translated}
 
@@ -133,5 +136,4 @@ async def webhook(request: Request):
     except Exception as e:
         print("❌ WEBHOOK_FATAL:", repr(e))
         print(traceback.format_exc())
-        # ✅ 讓你 curl 看得到錯誤原因
         return {"ok": False, "error": repr(e)}
