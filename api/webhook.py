@@ -51,20 +51,24 @@ def reply_line(reply_token: str, text: str):
     if r.status_code != 200:
         print("❌ LINE reply failed:", r.status_code, r.text)
 
-
 def translate_family(text: str) -> str:
     text = (text or "").strip()
     if not text:
         return ""
 
-    # 避免 bot 翻自己洗版（保留，仍然有用）
+    # 避免 bot 翻自己
     if text.startswith("🇹🇼") or text.startswith("🇻🇳"):
         return ""
 
-    if is_vietnamese(text):
-        system = VN_TO_TW_PROMPT
+    # 🔴 非家庭語氣 → 直翻
+    if is_non_family(text):
+        system = DIRECT_TRANSLATE_PROMPT
     else:
-        system = TW_TO_VN_PROMPT
+        # 家庭語氣維持原邏輯
+        if is_vietnamese(text):
+            system = VN_TO_TW_PROMPT
+        else:
+            system = TW_TO_VN_PROMPT
 
     if not OPENAI_API_KEY:
         return "(OPENAI_API_KEY 沒設定)"
@@ -75,12 +79,11 @@ def translate_family(text: str) -> str:
             {"role": "system", "content": system},
             {"role": "user", "content": text},
         ],
-        temperature=0.3,
+        temperature=0.2,   # 直翻建議低一點
         max_tokens=180,
     )
 
-    out = (resp.choices[0].message.content or "").strip()
-    return out
+    return (resp.choices[0].message.content or "").strip()
 
 # ✅ 這支 function 在 Vercel 可能會收到 path = "/" 或 "/api/webhook"
 @app.get("/")
