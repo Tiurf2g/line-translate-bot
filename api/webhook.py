@@ -1,39 +1,32 @@
 from fastapi import FastAPI, Request
-import os, json, hashlib
-import httpx
+import requests, os, json
 from openai import OpenAI
 
 app = FastAPI()
 
 # LINE
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
 
 # OpenAI
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Upstash Cache
-KV_URL = os.getenv("KV_REST_API_URL", "")
-KV_TOKEN = os.getenv("KV_REST_API_TOKEN", "")
-CACHE_KEY = "cache_translate_bot_v2"
+KV_URL = os.getenv("KV_REST_API_URL")
+KV_TOKEN = os.getenv("KV_REST_API_TOKEN")
+CACHE_KEY = "cache_translate_bot"
 
-HTTP_TIMEOUT = httpx.Timeout(6.0, connect=3.0)
-
-def _h(s: str) -> str:
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:32]
 
 # -------------------------
-#   Upstash Cache (async)
+#   Upstash Cache
 # -------------------------
-async def load_cache() -> dict:
-    if not KV_URL or not KV_TOKEN:
-        return {}
+def load_cache():
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-            r = await c.get(
-                f"{KV_URL}/get/{CACHE_KEY}",
-                headers={"Authorization": f"Bearer {KV_TOKEN}"},
-            )
+        r = requests.get(
+            f"{KV_URL}/get/{CACHE_KEY}",
+            headers={"Authorization": f"Bearer {KV_TOKEN}"},
+            timeout=5
+        )
         raw = r.json().get("result")
         if isinstance(raw, str):
             return json.loads(raw)
@@ -41,99 +34,116 @@ async def load_cache() -> dict:
     except:
         return {}
 
-async def save_cache(cache: dict):
-    if not KV_URL or not KV_TOKEN:
-        return
+
+def save_cache(cache):
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-            await c.post(
-                f"{KV_URL}/set/{CACHE_KEY}",
-                headers={
-                    "Authorization": f"Bearer {KV_TOKEN}",
-                    "Content-Type": "application/json",
-                },
-                json={"value": cache},
-            )
+        requests.post(
+            f"{KV_URL}/set/{CACHE_KEY}",
+            headers={
+                "Authorization": f"Bearer {KV_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            json={"value": cache},
+            timeout=5
+        )
     except:
         pass
 
+
 # -------------------------
-#   Translate (one-shot: detect + translate)
+#   Detect Language
 # -------------------------
-SYSTEM_TRANSLATOR = (
-    "你是台灣中文 ↔ 越南文的即時聊天翻譯員。"
-    "目標：像家人/朋友聊天一樣自然、在地、精準。"
-    "規則：只輸出翻譯結果，不要解釋、不加括號、不加原文、不加語言標籤、不加emoji。"
-)
-
-USER_PROMPT = """請先判斷這句話主要語言（中文或越南文），然後翻譯成另一種語言：
-- 中文→翻成「台灣日常口語中文」：自然、好懂、像聊天（可用台灣常用詞），避免書面與生硬直翻。
-- 越南文→翻成「越南日常口語」：自然、越南人平常會講的說法，避免正式公文風。
-注意：保留人名/地名/數字/單位/時間格式；不確定縮寫就原樣保留；髒話/語氣詞照原語氣自然呈現。
-要翻譯的內容：
-{text}
-"""
-
-async def translate_one_shot(text: str, cache: dict) -> str:
-    # normalize
-    text = (text or "").strip()
-    if not text:
-        return text
-
-    # avoid wasting tokens for very short junk
-    if len(text) <= 1:
-        return text
-
-    ck = f"t::{_h(text)}"
+def detect_lang(text, cache):
+    ck = f"detect::{text}"
     if ck in cache:
         return cache[ck]
+
+    prompt = f"""
+只回答「中文」或「越南文」其中一個。
+
+判斷這句話是哪一種語言：
+
+{text}
+"""
 
     try:
         res = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": SYSTEM_TRANSLATOR},
-                {"role": "user", "content": USER_PROMPT.format(text=text)},
+                {"role": "system", "content": "你是一個語言識別器，只回答語言名稱。"},
+                {"role": "user", "content": prompt},
             ],
-            temperature=0.2,
+            temperature=0
         )
-        out = (res.choices[0].message.content or "").strip()
-        if not out:
-            out = text
+        lang = res.choices[0].message.content.strip()
+    except:
+        lang = "中文"
+
+    cache[ck] = lang
+    save_cache(cache)
+    return lang
+
+
+# -------------------------
+#   Translate（自然台式中文 & 自然越式越南文）
+# -------------------------
+def translate(text, target_lang, cache):
+    ck = f"trans::{target_lang}::{text}"
+    if ck in cache:
+        return cache[ck]
+
+    tone_rule = {
+        "中文": (
+            "請翻譯成自然、口語、像台灣人在聊天的中文。"
+            "不要教學、不要字典解釋、不要說『在越南文中』、不要正式、不要僵硬。"
+            "就像情侶、家人、朋友聊天那種自然感。"
+        ),
+        "越南文": (
+            "請翻譯成自然的越南文（越南日常口語）。"
+            "不要正式、不要僵硬、不要書面語、不要字典式定義。"
+        )
+    }
+
+    prompt = f"""
+{tone_rule[target_lang]}
+如果原文已經是 {target_lang}，請直接輸出原文。
+
+要翻譯的內容：
+
+{text}
+"""
+
+    try:
+        res = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "你是自然口語翻譯員，翻譯要像真人在講話。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.4
+        )
+        out = res.choices[0].message.content.strip()
     except:
         out = text
 
     cache[ck] = out
-    # fire-and-forget style (await to persist; you can remove await for even faster but less reliable cache)
-    await save_cache(cache)
+    save_cache(cache)
     return out
 
-# -------------------------
-#   LINE Reply (async)
-# -------------------------
-async def reply(reply_token: str, text: str):
-    if not LINE_CHANNEL_ACCESS_TOKEN or not reply_token:
-        return
-    payload = {"replyToken": reply_token, "messages": [{"type": "text", "text": text}]}
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-            await c.post(
-                LINE_REPLY_API,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-                },
-                json=payload,
-            )
-    except:
-        pass
 
 # -------------------------
-#   Health check (optional but recommended for LINE Developers verify)
+#   LINE Reply
 # -------------------------
-@app.get("/api/healthz")
-async def healthz():
-    return {"ok": True}
+def reply(token, text):
+    requests.post(
+        LINE_REPLY_API,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        },
+        json={"replyToken": token, "messages": [{"type": "text", "text": text}]}
+    )
+
 
 # -------------------------
 #   Webhook
@@ -146,7 +156,7 @@ async def webhook(req: Request):
         return {"status": "ok"}
 
     events = body.get("events", [])
-    cache = await load_cache()
+    cache = load_cache()
 
     for ev in events:
         if ev.get("type") != "message":
@@ -156,17 +166,19 @@ async def webhook(req: Request):
         if msg.get("type") != "text":
             continue
 
-        text = (msg.get("text") or "").strip()
-        if not text:
-            continue
-
-        # 避免自己回自己（如果你有把 bot 的 userId 存起來可更精準判斷；先用常見欄位保底）
-        src = ev.get("source", {})
-        if src.get("type") == "bot":
-            continue
-
+        text = msg.get("text").strip()
         reply_token = ev.get("replyToken")
-        result = await translate_one_shot(text, cache)
-        await reply(reply_token, result)
+
+        # Language detection
+        lang = detect_lang(text, cache)
+
+        # Decide target language
+        target = "越南文" if lang == "中文" else "中文"
+
+        # Natural translation
+        result = translate(text, target, cache)
+
+        # Reply output
+        reply(reply_token, result)
 
     return {"status": "ok"}
