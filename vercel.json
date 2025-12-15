@@ -1,9 +1,0 @@
-{
-  "functions": {
-    "api/**/*.py": { "runtime": "python3.11" }
-  },
-  "rewrites": [
-    { "source": "/webhook", "destination": "/api/webhook.py" },
-    { "source": "/healthz", "destination": "/api/webhook.py" }
-  ]
-}
