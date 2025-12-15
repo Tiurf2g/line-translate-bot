@@ -22,9 +22,6 @@ HTTP_TIMEOUT = httpx.Timeout(6.0, connect=3.0)
 def _h(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:32]
 
-# -------------------------
-#   Upstash Cache (async)
-# -------------------------
 async def load_cache() -> dict:
     if not KV_URL or not KV_TOKEN:
         return {}
@@ -57,9 +54,6 @@ async def save_cache(cache: dict):
     except:
         pass
 
-# -------------------------
-#   Translate (one-shot: detect + translate)
-# -------------------------
 SYSTEM_TRANSLATOR = (
     "你是台灣中文 ↔ 越南文的即時聊天翻譯員。"
     "目標：像家人/朋友聊天一樣自然、在地、精準。"
@@ -69,19 +63,14 @@ SYSTEM_TRANSLATOR = (
 USER_PROMPT = """請先判斷這句話主要語言（中文或越南文），然後翻譯成另一種語言：
 - 中文→翻成「台灣日常口語中文」：自然、好懂、像聊天（可用台灣常用詞），避免書面與生硬直翻。
 - 越南文→翻成「越南日常口語」：自然、越南人平常會講的說法，避免正式公文風。
-注意：保留人名/地名/數字/單位/時間格式；不確定縮寫就原樣保留；髒話/語氣詞照原語氣自然呈現。
+注意：保留人名/地名/數字/單位/時間格式；不確定縮寫就原樣保留。
 要翻譯的內容：
 {text}
 """
 
 async def translate_one_shot(text: str, cache: dict) -> str:
-    # normalize
     text = (text or "").strip()
-    if not text:
-        return text
-
-    # avoid wasting tokens for very short junk
-    if len(text) <= 1:
+    if not text or len(text) <= 1:
         return text
 
     ck = f"t::{_h(text)}"
@@ -97,20 +86,14 @@ async def translate_one_shot(text: str, cache: dict) -> str:
             ],
             temperature=0.2,
         )
-        out = (res.choices[0].message.content or "").strip()
-        if not out:
-            out = text
+        out = (res.choices[0].message.content or "").strip() or text
     except:
         out = text
 
     cache[ck] = out
-    # fire-and-forget style (await to persist; you can remove await for even faster but less reliable cache)
     await save_cache(cache)
     return out
 
-# -------------------------
-#   LINE Reply (async)
-# -------------------------
 async def reply(reply_token: str, text: str):
     if not LINE_CHANNEL_ACCESS_TOKEN or not reply_token:
         return
@@ -128,16 +111,10 @@ async def reply(reply_token: str, text: str):
     except:
         pass
 
-# -------------------------
-#   Health check (optional but recommended for LINE Developers verify)
-# -------------------------
 @app.get("/api/healthz")
 async def healthz():
     return {"ok": True}
 
-# -------------------------
-#   Webhook
-# -------------------------
 @app.post("/api/webhook")
 async def webhook(req: Request):
     try:
@@ -151,18 +128,12 @@ async def webhook(req: Request):
     for ev in events:
         if ev.get("type") != "message":
             continue
-
         msg = ev.get("message", {})
         if msg.get("type") != "text":
             continue
 
         text = (msg.get("text") or "").strip()
         if not text:
-            continue
-
-        # 避免自己回自己（如果你有把 bot 的 userId 存起來可更精準判斷；先用常見欄位保底）
-        src = ev.get("source", {})
-        if src.get("type") == "bot":
             continue
 
         reply_token = ev.get("replyToken")
