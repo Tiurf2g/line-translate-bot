@@ -1,6 +1,6 @@
-# /api/webhook.py
+# api/webhook.py
 from fastapi import FastAPI, Request
-import requests, os, json, re, math
+import requests, os, json, re
 from typing import Dict, Any, List
 from openai import OpenAI
 
@@ -11,9 +11,10 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 LINE_REPLY_API = "https://api.line.me/v2/bot/message/reply"
 SETTINGS_FILE = "/tmp/user_settings.json"
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # 可用環境變數覆寫
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
+
 
 # --- Utilities: settings persistence ---
 def load_settings() -> Dict[str, Any]:
@@ -25,12 +26,15 @@ def load_settings() -> Dict[str, Any]:
     except Exception:
         return {}
 
+
 def save_settings(data: Dict[str, Any]) -> None:
     try:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
-        pass  # Vercel /tmp 理論上可寫；失敗時放棄但不中斷流程
+        # why: Vercel /tmp 允許寫，但失敗時不要中斷 webhook
+        pass
+
 
 # --- Language aliases & normalization ---
 LANG_ALIASES = {
@@ -45,6 +49,7 @@ LANG_ALIASES = {
     "德文": ["德文", "de", "german"],
 }
 
+
 def normalize_lang(name: str) -> str:
     n = (name or "").strip().lower()
     for std, alts in LANG_ALIASES.items():
@@ -52,15 +57,17 @@ def normalize_lang(name: str) -> str:
             return std
     return name.strip() or "中文"
 
+
 # --- Default user config ---
 def default_user_conf() -> Dict[str, Any]:
     return {
-        "source": "中文",          # 預設：中文→越南文
+        "source": "中文",
         "target": "越南文",
-        "tone": "casual",         # casual|formal|business|street
-        "unit_locale": "vn",      # vn|tw|none
-        "glossary": {},           # {"原詞": "譯詞"}
+        "tone": "casual",
+        "unit_locale": "vn",
+        "glossary": {},
     }
+
 
 # --- LINE reply helper ---
 def line_reply(reply_token: str, text: str) -> None:
@@ -77,7 +84,9 @@ def line_reply(reply_token: str, text: str) -> None:
     try:
         requests.post(LINE_REPLY_API, headers=headers, json=payload, timeout=8)
     except Exception:
-        pass  # 避免 webhook 5xx
+        # why: 避免 webhook 回 5xx 讓 LINE 重送
+        pass
+
 
 # --- One-shot decide & translate ---
 DECIDE_TRANSLATE_SYS = (
@@ -89,8 +98,8 @@ DECIDE_TRANSLATE_SYS = (
     "若遇到 glossary 中的詞，嚴格使用指定譯法。"
 )
 
+
 def build_prompt(user_text: str, conf: Dict[str, Any]) -> List[Dict[str, str]]:
-    # 用 JSON block 傳規則 + 配置，讓模型自行決定方向；單一呼叫達成偵測+翻譯
     cfg = {
         "source": conf.get("source", "中文"),
         "target": conf.get("target", "越南文"),
@@ -105,8 +114,12 @@ def build_prompt(user_text: str, conf: Dict[str, Any]) -> List[Dict[str, str]]:
     }
     return [
         {"role": "system", "content": DECIDE_TRANSLATE_SYS},
-        {"role": "user", "content": f"CONFIG:\n{json.dumps(cfg, ensure_ascii=False)}\n\nTEXT:\n{user_text}"},
+        {
+            "role": "user",
+            "content": f"CONFIG:\n{json.dumps(cfg, ensure_ascii=False)}\n\nTEXT:\n{user_text}",
+        },
     ]
+
 
 def decide_and_translate(text: str, conf: Dict[str, Any]) -> str:
     try:
@@ -115,12 +128,12 @@ def decide_and_translate(text: str, conf: Dict[str, Any]) -> str:
             model=OPENAI_MODEL,
             messages=msgs,
             temperature=0,
-            timeout=12_000,  # ms for openai-python>=1.0; 不同版本會忽略此參數也不致錯
         )
         return (res.choices[0].message.content or "").strip()
     except Exception:
-        # 失敗回退：原文回傳，避免阻斷對話
+        # why: OpenAI 失敗時不中斷，回原文避免阻塞
         return text
+
 
 # --- Commands ---
 SET_CMD = re.compile(r"^/set\s+(\S+)\s+(\S+)\s*$", re.IGNORECASE)
@@ -129,6 +142,7 @@ UNIT_CMD = re.compile(r"^/unit\s+(vn|tw|none)\s*$", re.IGNORECASE)
 GLOSS_ADD_CMD = re.compile(r"^/glossary\s+add\s+(.+?)=(.+)$", re.IGNORECASE)
 GLOSS_LIST_CMD = re.compile(r"^/glossary\s+list\s*$", re.IGNORECASE)
 GLOSS_CLEAR_CMD = re.compile(r"^/glossary\s+clear\s*$", re.IGNORECASE)
+
 
 def handle_commands(user_id: str, text: str, conf: Dict[str, Any]) -> str:
     m = SET_CMD.match(text)
@@ -168,11 +182,22 @@ def handle_commands(user_id: str, text: str, conf: Dict[str, Any]) -> str:
         return "🗑️ 已清空詞彙表"
 
     if text in ("/lang", "/設定"):
-        return f"🔧 目前設定：{conf['source']} → {conf['target']} | tone={conf['tone']} | unit={conf['unit_locale']} | glossary={len(conf.get('glossary', {}))} 筆"
+        return (
+            f"🔧 目前設定：{conf['source']} → {conf['target']} | "
+            f"tone={conf['tone']} | unit={conf['unit_locale']} | "
+            f"glossary={len(conf.get('glossary', {}))} 筆"
+        )
 
-    return ""  # 非指令
+    return ""
 
-# --- FastAPI webhook ---
+
+# --- Webhook endpoints ---
+@app.get("/webhook")
+def webhook_verify():
+    # why: LINE Console 的 Verify 會發 GET，需要回 200 讓它過
+    return {"ok": True}
+
+
 @app.post("/webhook")
 async def webhook(req: Request):
     body = await req.json()
@@ -195,10 +220,8 @@ async def webhook(req: Request):
         if not user_id or not reply_token:
             continue
 
-        # init user conf
         user_conf = settings.get(user_id) or default_user_conf()
 
-        # command handling
         cmd_resp = handle_commands(user_id, user_text, user_conf)
         if cmd_resp:
             settings[user_id] = user_conf
@@ -206,15 +229,14 @@ async def webhook(req: Request):
             line_reply(reply_token, cmd_resp)
             continue
 
-        # decide & translate (single API call)
         translated = decide_and_translate(user_text, user_conf)
         line_reply(reply_token, translated)
 
-        # persist
         settings[user_id] = user_conf
         save_settings(settings)
 
     return {"status": "ok"}
+
 
 @app.get("/healthz")
 def health():
