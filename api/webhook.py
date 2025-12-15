@@ -57,19 +57,17 @@ def translate_family(text: str) -> str:
     if not text:
         return ""
 
-    # 避免 bot 翻自己洗版
+    # 避免 bot 翻自己洗版（保留，仍然有用）
     if text.startswith("🇹🇼") or text.startswith("🇻🇳"):
         return ""
 
     if is_vietnamese(text):
         system = VN_TO_TW_PROMPT
-        prefix = "🇹🇼 "
     else:
         system = TW_TO_VN_PROMPT
-        prefix = "🇻🇳 "
 
     if not OPENAI_API_KEY:
-        return prefix + "(OPENAI_API_KEY 沒設定)"
+        return "(OPENAI_API_KEY 沒設定)"
 
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -80,9 +78,9 @@ def translate_family(text: str) -> str:
         temperature=0.3,
         max_tokens=180,
     )
-    out = (resp.choices[0].message.content or "").strip()
-    return prefix + out if out else ""
 
+    out = (resp.choices[0].message.content or "").strip()
+    return out
 
 # ✅ 這支 function 在 Vercel 可能會收到 path = "/" 或 "/api/webhook"
 @app.get("/")
