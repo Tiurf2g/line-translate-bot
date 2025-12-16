@@ -35,7 +35,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ★ 重要：在 Vercel 你的對外入口是 /api/webhook
 # 後台也要掛在這個底下，才不會 404
-ADMIN_BASE = "/api/webhook/admin"
+ADMIN_BASE = "/admin"
 
 
 # =========================
@@ -290,7 +290,7 @@ def _basic_auth_challenge() -> HTMLResponse:
 # =========================
 # Admin pages (★搬到 /api/webhook/admin)
 # =========================
-@app.get("/api/webhook/admin", response_class=HTMLResponse)
+@app.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request):
     if not _basic_auth_ok(request):
         return _basic_auth_challenge()
@@ -373,7 +373,7 @@ def admin_page(request: Request):
     return HTMLResponse(html, status_code=200)
 
 
-@app.post("/api/webhook/admin/add")
+@app.post("/admin/add")
 def admin_add(request: Request, bucket: str = Form(...), k: str = Form(...), v: str = Form(...)):
     if not _basic_auth_ok(request):
         return _basic_auth_challenge()
@@ -391,7 +391,7 @@ def admin_add(request: Request, bucket: str = Form(...), k: str = Form(...), v: 
     return RedirectResponse(url=ADMIN_BASE, status_code=303)
 
 
-@app.post("/api/webhook/admin/del")
+@app.post("/admin/del")
 def admin_del(request: Request, bucket: str = Form(...), k: str = Form(...)):
     if not _basic_auth_ok(request):
         return _basic_auth_challenge()
