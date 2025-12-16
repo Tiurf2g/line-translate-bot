@@ -22,7 +22,6 @@ DICT_KEY = os.getenv("DICT_KEY", "dict_translate_bot_v1")  # 可不設
 # 這支 function 的外部入口就是 /api/webhook/admin
 ADMIN_BASE = "/api/webhook/admin"
 
-
 # =========================
 # Upstash KV Dictionary
 # =========================
