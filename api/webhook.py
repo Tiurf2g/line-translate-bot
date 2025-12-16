@@ -137,7 +137,7 @@ def admin_page(request: Request):
 
       <div style="padding:12px; border:1px solid #ddd; border-radius:10px">
         <h4 style="margin-top:0">新增 / 更新詞條</h4>
-        <form method="post" action="{ADMIN_BASE}/add">
+        <form method="post" action="/api/webhook/admin_add">
           <div style="margin:8px 0">
             類型：
             <select name="bucket">
@@ -154,7 +154,7 @@ def admin_page(request: Request):
 
       <div style="padding:12px; border:1px solid #ddd; border-radius:10px; margin-top:12px">
         <h4 style="margin-top:0">刪除詞條</h4>
-        <form method="post" action="{ADMIN_BASE}/del">
+        <form method="post" action="/api/webhook/admin_del">
           <div style="margin:8px 0">
             類型：
             <select name="bucket">
