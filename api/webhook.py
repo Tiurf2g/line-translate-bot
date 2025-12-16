@@ -44,8 +44,15 @@ VN_TO_TW_PROMPT = """你是一位很懂越南文化的台灣人，
 - 可以出現「嗯、喔、啊、欸、啦、耶」等口語語氣
 - 翻成自然、不刺耳、不生硬的生活中文
 - 不要太完整句、不要像作文
-- 不要加解釋，只輸出翻譯內容
+
+重要規則（台灣在地用語）：
+- "thẻ bảo hiểm y tế" 一律翻成「健保卡」
+- 不可翻成「保險卡」
+- 牽涉小孩/看醫生/證件/卡片時，優先使用台灣家庭常用說法
+
+不要加解釋，只輸出翻譯內容
 """
+
 DIRECT_TRANSLATE_PROMPT = """你是一個【中文 ↔ 越南文】專用翻譯器。
 
 規則：
@@ -63,9 +70,37 @@ VN_MARKS = set("ăâêôơưđĂÂÊÔƠƯĐ")
 # 連結 / 網頁分享：不翻譯（避免群組被洗版）
 URL_PATTERN = re.compile(r"(https?://|www\.|line\.me/|liff\.line\.me/)")
 
+# --- Filler / 語助詞：硬規則（不走模型，穩、快、準） ---
+FILLER_MAP_TW_TO_VN = {
+    "嗯": "Uh",
+    "嗯嗯": "Uh uh",
+    "喔": "Ờ",
+    "哦": "Ờ",
+    "啊": "À",
+}
+
+# 越南常見語助詞（含你要的 Uh）
+VN_FILLERS = {"uh", "ừ", "ờ", "ha", "nè", "á", "a", "à", "ừm", "um", "ừm ừm"}
+
+FILLER_MAP_VN_TO_TW = {
+    "uh": "嗯",
+    "ừ": "嗯",
+    "ờ": "喔",
+    "ha": "哈",
+    "nè": "捏",
+    "á": "啊",
+    "à": "啊",
+    "um": "嗯",
+    "ừm": "嗯",
+}
+
 
 def is_vietnamese(text: str) -> bool:
-    return any(ch in VN_MARKS for ch in text)
+    t = (text or "").strip().lower()
+    # 讓 Uh 這種沒有重音的越南語助詞，也能被判定為越南文
+    if t in VN_FILLERS:
+        return True
+    return any(ch in VN_MARKS for ch in (text or ""))
 
 
 def is_non_family(event: dict) -> bool:
@@ -128,15 +163,26 @@ def translate_text(text: str, event: dict) -> str:
     if URL_PATTERN.search(text):
         return ""
 
-    # 避免 bot 翻自己
+    # 避免 bot 翻自己（你之前不想顯示國別前綴，所以保留這個保護就好）
     if text.startswith("🇹🇼") or text.startswith("🇻🇳"):
         return ""
 
+    # --- 1) 語助詞硬規則：優先處理（穩、快、準） ---
+    # 中文 fillers -> 越南
+    if not is_vietnamese(text) and text in FILLER_MAP_TW_TO_VN:
+        return FILLER_MAP_TW_TO_VN[text]
+
+    # 越南 fillers -> 中文（含 Uh）
+    t_low = text.lower()
+    if is_vietnamese(text) and t_low in FILLER_MAP_VN_TO_TW:
+        return FILLER_MAP_VN_TO_TW[t_low]
+
+    # --- 2) 模式選擇 ---
     # 非家庭 → 直翻
     if is_non_family(event):
         system = DIRECT_TRANSLATE_PROMPT
     else:
-        # 家庭模式
+        # 家庭模式：判語言決定 prompt
         system = VN_TO_TW_PROMPT if is_vietnamese(text) else TW_TO_VN_PROMPT
 
     if not OPENAI_API_KEY:
@@ -152,7 +198,16 @@ def translate_text(text: str, event: dict) -> str:
         max_tokens=180,
     )
 
-    return (resp.choices[0].message.content or "").strip()
+    out = (resp.choices[0].message.content or "").strip()
+
+    # --- 3) 台灣在地名詞保底：避免「健保卡」被翻成「保險卡」 ---
+    # 只要輸入明顯在講越南的「健保卡」概念，就強制修正一次
+    # （即使 prompt 失手也救得回來）
+    src_low = text.lower()
+    if ("thẻ bảo hiểm y tế" in src_low or "bao hiem y te" in src_low or "bảo hiểm y tế" in src_low):
+        out = out.replace("保險卡", "健保卡")
+
+    return out
 
 
 # =========================
