@@ -1,14 +1,8 @@
-// app/api/admin/family-glossary/route.ts
 import { kvGetJson, kvSetJson } from "../../_lib/kv";
 
-type GlossaryEntry = {
-  zh: string;
-  en: string;
-  tags?: string[];
-  note?: string | null;
-};
+type GlossaryEntry = { zh: string; en: string; tags?: string[]; note?: string | null };
 
-const KEY = process.env.FAMILY_GLOSSARY_KEY || "family_glossary_v1";
+const KEY = process.env.FACTORY_GLOSSARY_KEY || "factory_glossary_v1";
 const ADMIN_PIN = process.env.ADMIN_PASS || process.env.ADMIN_PIN || "";
 
 function assertPin(req: Request) {
@@ -23,12 +17,7 @@ function normalize(items: GlossaryEntry[]) {
     const zh = (it.zh || "").trim();
     const en = (it.en || "").trim();
     if (!zh) continue;
-    map.set(zh, {
-      zh,
-      en,
-      tags: (it.tags || []).map(t => String(t).trim()).filter(Boolean),
-      note: it.note ?? null,
-    });
+    map.set(zh, { zh, en, tags: (it.tags || []).map(String).map(t => t.trim()).filter(Boolean), note: it.note ?? null });
   }
   return Array.from(map.values());
 }
@@ -39,7 +28,6 @@ export async function POST(req: Request) {
 
     const body = await req.json().catch(() => ({}));
     const action = String(body?.action || "");
-
     const current = normalize((await kvGetJson<GlossaryEntry[]>(KEY)) || []);
 
     if (action === "reset") {
@@ -56,7 +44,7 @@ export async function POST(req: Request) {
       map.set(zh, {
         zh,
         en: (entry.en || "").trim(),
-        tags: (entry.tags || []).map(t => String(t).trim()).filter(Boolean),
+        tags: (entry.tags || []).map(String).map(t => t.trim()).filter(Boolean),
         note: entry.note ?? null,
       });
 
@@ -68,12 +56,8 @@ export async function POST(req: Request) {
     if (action === "import") {
       const mode = (body?.mode === "replace" ? "replace" : "append") as "append" | "replace";
       const items: GlossaryEntry[] = Array.isArray(body?.items) ? body.items : [];
-
       const imported = normalize(items);
-      const merged = mode === "replace"
-        ? imported
-        : normalize([...current, ...imported]); // append 但會去重
-
+      const merged = mode === "replace" ? imported : normalize([...current, ...imported]);
       await kvSetJson(KEY, merged);
       return Response.json({ ok: true, action, mode, count: merged.length, imported: imported.length });
     }
