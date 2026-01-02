@@ -1,3 +1,7 @@
+// app/api/admin/family-glossary/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { kvGetJson, kvSetJson } from "../../_lib/kv";
 
 type GlossaryEntryRaw = { zh: string; vi?: string; en?: string; tags?: string[]; note?: string | null };
