@@ -2,9 +2,9 @@
 import { kv } from "@vercel/kv";
 
 /**
- * Vercel KV helper
- * - kvGetRaw / kvSetRaw：字串為主
- * - kvGetJson / kvSetJson：直接存取 JSON（kv 會處理序列化）
+ * Vercel KV helper (最穩版本)
+ * - 不再自己手刻 REST fetch，避免「fetch failed」
+ * - 直接透過 @vercel/kv 存取
  */
 
 export async function kvGetRaw(key: string): Promise<string | null> {
