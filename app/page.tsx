@@ -70,24 +70,34 @@ export default function Home() {
   const [testOut, setTestOut] = useState("");
   const [testErr, setTestErr] = useState("");
   const [testing, setTesting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   async function refresh() {
+    if (refreshing) return;
+    setRefreshing(true);
     setErr("");
+
+    const ts = Date.now();
+    const init: RequestInit = { cache: "no-store", headers: { "cache-control": "no-store" } };
+
     try {
-      const r1 = await fetch("/api/status", { cache: "no-store" });
-      const s = (await r1.json()) as StatusResp;
+      const r1 = await fetch(`/api/status?ts=${ts}`, init);
+      const s = (await r1.json().catch(() => ({}))) as StatusResp;
       setStatus(s);
+      if (!r1.ok || s?.ok === false) throw new Error((s as any)?.error || `HTTP ${r1.status}`);
     } catch (e: any) {
       setErr(`Status API failed: ${e?.message || String(e)}`);
     }
 
     try {
-      const r2 = await fetch("/api/line/webhook", { cache: "no-store" });
-      const w = (await r2.json()) as WebhookResp;
+      const r2 = await fetch(`/api/line/webhook?ts=${ts}`, init);
+      const w = (await r2.json().catch(() => ({}))) as WebhookResp;
       setWebhook(w);
-    } catch (e: any) {
+    } catch {
       // webhook GET 不一定有 JSON（看你實作），失敗也不要緊
       setWebhook({ ok: false, note: "GET /api/line/webhook did not return JSON" });
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -104,8 +114,10 @@ export default function Home() {
         body: JSON.stringify({ text: testInput, direction: testDir }),
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || data?.ok === false) throw new Error(data?.error || `HTTP ${r.status}`);
-      setTestOut(data.translated || "");
+      if (!r.ok || (data as any)?.ok === false) throw new Error((data as any)?.error || `HTTP ${r.status}`);
+
+      // ✅ 相容不同回傳欄位：translated / output / text
+      setTestOut((data as any).translated || (data as any).output || (data as any).text || "");
     } catch (e: any) {
       setTestErr(e?.message || String(e));
     } finally {
@@ -115,6 +127,7 @@ export default function Home() {
 
   useEffect(() => {
     refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const env = status?.env || {};
@@ -163,9 +176,12 @@ export default function Home() {
               Last refresh: {last}
             </span>
             <button
+              type="button"
               onClick={refresh}
+              disabled={refreshing}
               style={{
-                cursor: "pointer",
+                cursor: refreshing ? "not-allowed" : "pointer",
+                opacity: refreshing ? 0.65 : 1,
                 borderRadius: 12,
                 padding: "10px 12px",
                 border: "1px solid rgba(255,255,255,0.18)",
@@ -175,7 +191,7 @@ export default function Home() {
                 fontSize: 13,
               }}
             >
-              Refresh
+              {refreshing ? "Refreshing…" : "Refresh"}
             </button>
           </div>
         </div>
@@ -202,7 +218,7 @@ export default function Home() {
           <Card title="核心服務狀態">
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <Chip ok={Boolean(status?.ok)} label="Status API" />
-              <Chip ok={Boolean(webhook && (webhook.ok === true || webhook.hint))} label="Webhook GET" />
+              <Chip ok={Boolean(webhook && (webhook.ok === true || (webhook as any).hint))} label="Webhook GET" />
               <Chip ok={Boolean(env.OPENAI_API_KEY)} label="OpenAI key loaded" />
               <Chip ok={Boolean(env.LINE_CHANNEL_ACCESS_TOKEN)} label="LINE token loaded" />
               <Chip ok={Boolean(env.LINE_CHANNEL_SECRET)} label="LINE secret loaded" />
@@ -216,8 +232,8 @@ export default function Home() {
 
           <Card title="資料與後台">
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <Chip ok={Boolean(env.UPSTASH_REDIS_REST_URL)} label="Upstash URL loaded" />
-              <Chip ok={Boolean(env.UPSTASH_REDIS_REST_TOKEN)} label="Upstash token loaded" />
+              <Chip ok={Boolean(env.KV_REST_API_URL)} label="KV URL loaded" />
+              <Chip ok={Boolean(env.KV_REST_API_TOKEN)} label="KV token loaded" />
               <Chip ok={Boolean(env.ADMIN_PIN)} label="Admin PIN loaded" />
               <Chip ok={(env.FAMILY_GROUP_IDS_count || 0) > 0} label={`Family groups: ${env.FAMILY_GROUP_IDS_count || 0}`} />
             </div>
@@ -321,25 +337,27 @@ export default function Home() {
                 </select>
               </div>
 
-              <button
-                onClick={runTest}
-                disabled={testing}
-                style={{
-                  cursor: testing ? "not-allowed" : "pointer",
-                  borderRadius: 12,
-                  padding: "10px 12px",
-                  border: "1px solid rgba(125,211,252,0.38)",
-                  background: "rgba(125,211,252,0.14)",
-                  color: "rgba(255,255,255,0.95)",
-                  fontWeight: 900,
-                  fontSize: 13,
-                  opacity: testing ? 0.7 : 1,
-                  height: 42,
-                  alignSelf: "end",
-                }}
-              >
-                {testing ? "Testing..." : "測試翻譯"}
-              </button>
+              <div style={{ minWidth: 120 }}>
+                <button
+                  type="button"
+                  onClick={runTest}
+                  disabled={testing}
+                  style={{
+                    cursor: testing ? "not-allowed" : "pointer",
+                    width: "100%",
+                    borderRadius: 12,
+                    padding: "10px 12px",
+                    border: "1px solid rgba(255,255,255,0.18)",
+                    background: "rgba(255,255,255,0.10)",
+                    color: "rgba(255,255,255,0.92)",
+                    fontWeight: 900,
+                    fontSize: 13,
+                    opacity: testing ? 0.65 : 1,
+                  }}
+                >
+                  {testing ? "測試中…" : "測試翻譯"}
+                </button>
+              </div>
             </div>
 
             <div style={{ marginTop: 10 }}>
@@ -412,16 +430,3 @@ export default function Home() {
                 fontSize: 12,
                 lineHeight: 1.5,
               }}
-            >
-              {JSON.stringify({ status, webhook }, null, 2)}
-            </pre>
-          </Card>
-        </div>
-
-        <div style={{ marginTop: 14, fontSize: 12, color: "rgba(255,255,255,0.55)" }}>
-          Tip：如果要讓群組翻譯更貼近生活用語，你就往「家庭詞庫」補：暱稱、口頭禪、醫療/育兒固定用語、常見地點/人物。
-        </div>
-      </div>
-    </main>
-  );
-}

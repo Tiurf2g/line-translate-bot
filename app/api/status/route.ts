@@ -7,7 +7,7 @@ export async function GET() {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  return Response.json({
+  const payload = {
     ok: true,
     time: new Date().toISOString(),
     env: {
@@ -16,17 +16,33 @@ export async function GET() {
       LINE_CHANNEL_ACCESS_TOKEN: Boolean(process.env.LINE_CHANNEL_ACCESS_TOKEN),
       LINE_CHANNEL_SECRET: Boolean(process.env.LINE_CHANNEL_SECRET),
 
+      // ✅ 你現在用的是 Vercel KV（@vercel/kv）
+      KV_REST_API_URL: Boolean(process.env.KV_REST_API_URL),
+      KV_REST_API_TOKEN: Boolean(process.env.KV_REST_API_TOKEN),
+
+      // （可留著：如果你未來又接 Upstash Redis REST 也不會壞）
       UPSTASH_REDIS_REST_URL: Boolean(process.env.UPSTASH_REDIS_REST_URL),
       UPSTASH_REDIS_REST_TOKEN: Boolean(process.env.UPSTASH_REDIS_REST_TOKEN),
 
       ADMIN_PIN: Boolean(process.env.ADMIN_PIN || process.env.ADMIN_PASS),
       FAMILY_GROUP_IDS_count: FAMILY_GROUP_IDS.length,
       FAMILY_GLOSSARY_KEY: Boolean(process.env.FAMILY_GLOSSARY_KEY),
+
       OPENAI_MODEL: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      VERCEL: Boolean(process.env.VERCEL),
+      VERCEL_ENV: process.env.VERCEL_ENV || "",
     },
     links: {
       webhook: "/api/line/webhook",
       admin: "/admin/family-glossary",
+    },
+  };
+
+  // ✅ 明確禁止 CDN/瀏覽器快取，讓 Refresh 一定看得到 time 變化
+  return Response.json(payload, {
+    headers: {
+      "Cache-Control": "no-store, max-age=0",
+      Pragma: "no-cache",
     },
   });
 }

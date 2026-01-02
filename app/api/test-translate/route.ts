@@ -1,143 +1,133 @@
-export const runtime = "edge";
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { kvGetJson, kvSetJson } from "../_lib/kv";
+import { kvGetJson } from "../_lib/kv";
 
-type Entry = {
-  zh: string;
-  vi?: string;
-  en?: string; // 向下相容舊欄位
-  tags?: string[];
-  note?: string | null;
-};
+type Entry = { zh: string; vi?: string; en?: string };
 
-type NormEntry = { zh: string; vi: string; tags: string[]; note: string | null };
+const GLOSSARY_KEY = process.env.FAMILY_GLOSSARY_KEY || "family_glossary_v1";
+const OPENAI_KEY = process.env.OPENAI_API_KEY || "";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
-const KEY = process.env.FAMILY_GLOSSARY_KEY || "family_glossary_v1";
 const ADMIN_PIN = process.env.ADMIN_PIN || process.env.ADMIN_PASS || "";
 
-function normalize(items: Entry[] | null | undefined): NormEntry[] {
-  const map = new Map<string, NormEntry>();
-  for (const it of items || []) {
-    const zh = (it.zh || "").trim();
-    const vi = ((it.vi ?? it.en) || "").trim();
-    if (!zh) continue;
-    map.set(zh, {
-      zh,
-      vi,
-      tags: (it.tags || []).map(String).map((t) => t.trim()).filter(Boolean),
-      note: it.note ?? null,
-    });
-  }
-  return Array.from(map.values());
+function pickDirection(text: string): "zh2vi" | "vi2zh" {
+  // 粗略偵測：有中日韓字 → zh2vi；否則當 vi2zh
+  const hasCJK = /[\u4E00-\u9FFF]/.test(text);
+  return hasCJK ? "zh2vi" : "vi2zh";
 }
 
-function requirePin(req: Request) {
-  if (!ADMIN_PIN) throw new Error("ADMIN_PIN not set");
-  const pin = req.headers.get("x-admin-pin") || "";
-  if (pin !== ADMIN_PIN) throw new Error("Unauthorized");
+function normalizeGlossary(raw: any): Array<{ zh: string; vi: string }> {
+  const arr = Array.isArray(raw) ? raw : [];
+  return arr
+    .map((x: Entry) => ({
+      zh: String(x?.zh || "").trim(),
+      vi: String((x?.vi ?? x?.en) || "").trim(),
+    }))
+    .filter((x) => x.zh.length > 0);
 }
 
-async function ensureInit(): Promise<NormEntry[]> {
-  const raw = await kvGetJson<Entry[]>(KEY);
-  if (raw == null) {
-    await kvSetJson(KEY, []);
-    return [];
-  }
-  return normalize(raw);
-}
+async function callOpenAI(system: string, user: string) {
+  if (!OPENAI_KEY) throw new Error("Missing OPENAI_API_KEY");
 
-export async function GET(req: Request) {
+  const t0 = Date.now();
+  const res = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${OPENAI_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      input: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+  });
+
+  const text = await res.text();
+  let data: any = null;
   try {
-    const url = new URL(req.url);
-    const force = url.searchParams.get("force") === "true";
+    data = JSON.parse(text);
+  } catch {}
 
-    // force=true：確保 KV 初始化（你之前用這個測）
-    const glossary = force ? await ensureInit() : normalize((await kvGetJson<Entry[]>(KEY)) || []);
-
-    return Response.json({ ok: true, key: KEY, count: glossary.length, glossary });
-  } catch (e: any) {
-    return Response.json(
-      {
-        ok: false,
-        error: e?.message || String(e),
-        missing_env: {
-          UPSTASH_REDIS_REST_URL: !process.env.UPSTASH_REDIS_REST_URL,
-          UPSTASH_REDIS_REST_TOKEN: !process.env.UPSTASH_REDIS_REST_TOKEN,
-          FAMILY_GLOSSARY_KEY: !process.env.FAMILY_GLOSSARY_KEY,
-        },
-      },
-      { status: 500 }
-    );
+  if (!res.ok) {
+    throw new Error(data?.error?.message || text || `OpenAI HTTP ${res.status}`);
   }
+
+  // responses API 通常會有 output_text
+  const out = data?.output_text
+    ?? data?.output?.[0]?.content?.[0]?.text
+    ?? "";
+
+  return { out: String(out || "").trim(), ms: Date.now() - t0 };
 }
 
-/**
- * POST 支援：
- * - action: "upsert"  entry: {zh, vi, tags?, note?}
- * - action: "import"  entries: Entry[]  mode: "append" | "replace"
- * - action: "reset"
- */
 export async function POST(req: Request) {
   try {
-    requirePin(req);
-
     const body = await req.json().catch(() => ({}));
-    const action = String(body?.action || "").toLowerCase();
+    const text = String(body?.text || "").trim();
+    const direction = (String(body?.direction || "auto") as any) as
+      | "auto"
+      | "zh2vi"
+      | "vi2zh";
 
-    if (!action) return Response.json({ ok: false, error: "action required" }, { status: 400 });
+    const pin = String(body?.pin || req.headers.get("x-admin-pin") || "");
 
-    if (action === "reset") {
-      await kvSetJson(KEY, []);
-      return Response.json({ ok: true, key: KEY, count: 0, glossary: [] });
+    if (ADMIN_PIN && pin !== ADMIN_PIN) {
+      return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
+    if (!text) {
+      return Response.json({ ok: false, error: "text required" }, { status: 400 });
     }
 
-    if (action === "upsert") {
-      const entry: Entry = body?.entry || {};
-      const zh = (entry.zh || "").trim();
-      const vi = ((entry.vi ?? entry.en) || "").trim();
+    const finalDir = direction === "auto" ? pickDirection(text) : direction;
 
-      if (!zh) return Response.json({ ok: false, error: "entry.zh required" }, { status: 400 });
+    const rawGlossary = await kvGetJson<any>(GLOSSARY_KEY);
+    const glossary = normalizeGlossary(rawGlossary);
 
-      const current = await ensureInit();
-      const map = new Map(current.map((x) => [x.zh, x]));
-      map.set(zh, {
-        zh,
-        vi,
-        tags: (entry.tags || []).map(String).map((t) => t.trim()).filter(Boolean),
-        note: entry.note ?? null,
-      });
+    // 為了避免 prompt 太長，只塞前 200 筆（通常夠用）
+    const slice = glossary.slice(0, 200);
+    const glossaryLines = slice
+      .map((x) => `- ${x.zh} => ${x.vi}`)
+      .join("\n");
 
-      const glossary = Array.from(map.values());
-      await kvSetJson(KEY, glossary);
-      return Response.json({ ok: true, key: KEY, count: glossary.length, glossary });
-    }
+    const system =
+      finalDir === "zh2vi"
+        ? `You are a STRICT translator. Translate Traditional Chinese to Vietnamese.
+Rules:
+- Translate exactly, do NOT paraphrase.
+- Keep punctuation and numbers.
+- If unclear/inaudible, output exactly: [UNSURE]
+- Use glossary terms when they match.
+Glossary:
+${glossaryLines}`
+        : `You are a STRICT translator. Translate Vietnamese to Traditional Chinese.
+Rules:
+- Translate exactly, do NOT paraphrase.
+- Keep punctuation and numbers.
+- If unclear/inaudible, output exactly: [UNSURE]
+- Use glossary terms when they match.
+Glossary:
+${glossaryLines}`;
 
-    if (action === "import") {
-      const mode = String(body?.mode || "append").toLowerCase();
-      const entries: Entry[] = Array.isArray(body?.entries) ? body.entries : [];
+    const user = text;
 
-      const incoming = normalize(entries);
+    const r = await callOpenAI(system, user);
 
-      if (mode === "replace") {
-        await kvSetJson(KEY, incoming);
-        return Response.json({ ok: true, key: KEY, count: incoming.length, glossary: incoming });
-      }
-
-      // append：同 zh 以「最後一筆」覆蓋
-      const current = await ensureInit();
-      const map = new Map(current.map((x) => [x.zh, x]));
-      for (const it of incoming) map.set(it.zh, it);
-
-      const glossary = Array.from(map.values());
-      await kvSetJson(KEY, glossary);
-      return Response.json({ ok: true, key: KEY, count: glossary.length, glossary });
-    }
-
-    return Response.json({ ok: false, error: `unknown action: ${action}` }, { status: 400 });
+    return Response.json({
+      ok: true,
+      direction: finalDir,
+      ms: r.ms,
+      input: text,
+      output: r.out,
+      glossary_count: glossary.length,
+    });
   } catch (e: any) {
-    const msg = e?.message || String(e);
-    const status = msg === "Unauthorized" ? 401 : 500;
-    return Response.json({ ok: false, error: msg }, { status });
+    return Response.json(
+      { ok: false, error: e?.message || String(e) },
+      { status: 500 }
+    );
   }
 }
