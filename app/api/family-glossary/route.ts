@@ -1,50 +1,59 @@
-import { kvGetJson, kvSetJson } from "../_lib/kv";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-type GlossaryEntryRaw = { zh: string; vi?: string; en?: string; tags?: string[]; note?: string | null };
-type GlossaryEntry = { zh: string; vi: string; tags?: string[]; note?: string | null };
+const URL = process.env.UPSTASH_REDIS_REST_URL || "";
+const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
 
-// ✅ 統一用 FAMILY_GLOSSARY_KEY
-const KEY = process.env.FAMILY_GLOSSARY_KEY || "family_glossary_v1";
-
-// ✅ 向下相容：如果你之前錯存到 FACTORY_GLOSSARY_KEY，就幫你把舊資料搬過來
-const LEGACY_KEY = process.env.FACTORY_GLOSSARY_KEY || "factory_glossary_v1";
-
-function normalize(items: GlossaryEntryRaw[]) {
-  const map = new Map<string, GlossaryEntry>();
-  for (const it of items || []) {
-    const zh = (it.zh || "").trim();
-    const vi = ((it.vi ?? it.en) || "").trim();
-    if (!zh) continue;
-    map.set(zh, {
-      zh,
-      vi,
-      tags: (it.tags || []).map(String).map((t) => t.trim()).filter(Boolean),
-      note: it.note ?? null,
-    });
+function assertEnv() {
+  if (!URL || !TOKEN) {
+    throw new Error("Missing UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN");
   }
-  return Array.from(map.values());
 }
 
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const force = url.searchParams.get("force") === "true";
-
-  let glossary = normalize((await kvGetJson<GlossaryEntryRaw[]>(KEY)) || []);
-
-  // 如果家庭 key 是空的，但 legacy 有資料 → 自動搬過來（避免你之前存錯 key 造成「明明有存但吃不到」）
-  if (glossary.length === 0 && LEGACY_KEY && LEGACY_KEY !== KEY) {
-    const legacy = normalize((await kvGetJson<GlossaryEntryRaw[]>(LEGACY_KEY)) || []);
-    if (legacy.length > 0) {
-      await kvSetJson(KEY, legacy);
-      glossary = legacy;
-    }
+async function upstashFetch(path: string, init?: RequestInit) {
+  assertEnv();
+  const r = await fetch(`${URL}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      ...(init?.headers || {}),
+    },
+    cache: "no-store",
+  });
+  const text = await r.text().catch(() => "");
+  if (!r.ok) {
+    throw new Error(`Upstash ${r.status}: ${text}`);
   }
-
-  // 若 KV 是 null，初始化
-  const rawNow = await kvGetJson<GlossaryEntryRaw[]>(KEY);
-  if (rawNow === null) {
-    await kvSetJson(KEY, []);
+  // Upstash 會回 JSON
+  try {
+    return JSON.parse(text);
+  } catch {
+    // 防守：萬一不是 JSON 也不要直接炸在這裡
+    return { result: null, raw: text };
   }
+}
 
-  return Response.json({ ok: true, key: KEY, count: glossary.length, glossary, force });
+export async function kvGetRaw(key: string): Promise<string | null> {
+  const data = await upstashFetch(`/get/${encodeURIComponent(key)}`);
+  return data?.result ?? null;
+}
+
+export async function kvGetJson<T>(key: string): Promise<T | null> {
+  const raw = await kvGetRaw(key);
+  if (raw == null) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+export async function kvSetRaw(key: string, value: string) {
+  // Upstash REST: /set/<key>/<value>
+  await upstashFetch(`/set/${encodeURIComponent(key)}/${encodeURIComponent(value)}`, { method: "POST" });
+  return true;
+}
+
+export async function kvSetJson(key: string, value: any) {
+  return kvSetRaw(key, JSON.stringify(value));
 }

@@ -52,9 +52,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
         backdropFilter: "blur(10px)",
       }}
     >
-      <div style={{ fontWeight: 900, fontSize: 14, marginBottom: 10, color: "rgba(255,255,255,0.92)" }}>
-        {title}
-      </div>
+      <div style={{ fontWeight: 900, fontSize: 14, marginBottom: 10, color: "rgba(255,255,255,0.92)" }}>{title}</div>
       {children}
     </div>
   );
@@ -64,6 +62,14 @@ export default function Home() {
   const [status, setStatus] = useState<StatusResp | null>(null);
   const [webhook, setWebhook] = useState<WebhookResp | null>(null);
   const [err, setErr] = useState<string>("");
+
+  // ✅ 一鍵測試翻譯（不送 LINE）
+  const [pin, setPin] = useState<string>(() => (typeof window === "undefined" ? "" : localStorage.getItem("ADMIN_PIN") || ""));
+  const [testInput, setTestInput] = useState("");
+  const [testDir, setTestDir] = useState<"auto" | "zh2vi" | "vi2zh">("auto");
+  const [testOut, setTestOut] = useState("");
+  const [testErr, setTestErr] = useState("");
+  const [testing, setTesting] = useState(false);
 
   async function refresh() {
     setErr("");
@@ -82,6 +88,28 @@ export default function Home() {
     } catch (e: any) {
       // webhook GET 不一定有 JSON（看你實作），失敗也不要緊
       setWebhook({ ok: false, note: "GET /api/line/webhook did not return JSON" });
+    }
+  }
+
+  async function runTest() {
+    setTesting(true);
+    setTestErr("");
+    setTestOut("");
+    try {
+      if (typeof window !== "undefined") localStorage.setItem("ADMIN_PIN", pin);
+
+      const r = await fetch("/api/test-translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-admin-pin": pin },
+        body: JSON.stringify({ text: testInput, direction: testDir }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data?.ok === false) throw new Error(data?.error || `HTTP ${r.status}`);
+      setTestOut(data.translated || "");
+    } catch (e: any) {
+      setTestErr(e?.message || String(e));
+    } finally {
+      setTesting(false);
     }
   }
 
@@ -226,10 +254,146 @@ export default function Home() {
               >
                 Open Admin
               </a>
+
+              <a
+                href={"/api/family-glossary?force=true"}
+                style={{
+                  textDecoration: "none",
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  border: "1px solid rgba(34,197,94,0.35)",
+                  background: "rgba(34,197,94,0.12)",
+                  color: "rgba(255,255,255,0.95)",
+                  fontWeight: 900,
+                  fontSize: 13,
+                }}
+              >
+                Init/Check Glossary
+              </a>
             </div>
 
             <div style={{ marginTop: 10, fontSize: 12, color: "rgba(255,255,255,0.68)", lineHeight: 1.5 }}>
               小提醒：這頁只顯示 true/false，不會洩漏任何 key。
+            </div>
+          </Card>
+        </div>
+
+        {/* ✅ 一鍵測試翻譯 */}
+        <div style={{ marginTop: 14 }}>
+          <Card title="一鍵測試翻譯（不送 LINE）">
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>ADMIN PIN（保護測試 API，避免被外面刷）</div>
+                <input
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  placeholder="輸入 ADMIN_PIN"
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    background: "rgba(0,0,0,0.18)",
+                    color: "rgba(255,255,255,0.92)",
+                    outline: "none",
+                  }}
+                />
+              </div>
+
+              <div style={{ minWidth: 160 }}>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>方向</div>
+                <select
+                  value={testDir}
+                  onChange={(e) => setTestDir(e.target.value as any)}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    background: "rgba(0,0,0,0.18)",
+                    color: "rgba(255,255,255,0.92)",
+                    outline: "none",
+                  }}
+                >
+                  <option value="auto">自動判斷</option>
+                  <option value="zh2vi">繁中 → 越南文</option>
+                  <option value="vi2zh">越南文 → 繁中</option>
+                </select>
+              </div>
+
+              <button
+                onClick={runTest}
+                disabled={testing}
+                style={{
+                  cursor: testing ? "not-allowed" : "pointer",
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  border: "1px solid rgba(125,211,252,0.38)",
+                  background: "rgba(125,211,252,0.14)",
+                  color: "rgba(255,255,255,0.95)",
+                  fontWeight: 900,
+                  fontSize: 13,
+                  opacity: testing ? 0.7 : 1,
+                  height: 42,
+                  alignSelf: "end",
+                }}
+              >
+                {testing ? "Testing..." : "測試翻譯"}
+              </button>
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>輸入</div>
+              <textarea
+                value={testInput}
+                onChange={(e) => setTestInput(e.target.value)}
+                placeholder="輸入你要測的句子（不會送到 LINE）"
+                style={{
+                  width: "100%",
+                  minHeight: 90,
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,0.16)",
+                  background: "rgba(0,0,0,0.18)",
+                  color: "rgba(255,255,255,0.92)",
+                  outline: "none",
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
+
+            {testErr ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  borderRadius: 12,
+                  border: "1px solid rgba(251,113,133,0.35)",
+                  background: "rgba(251,113,133,0.12)",
+                  fontSize: 12,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {testErr}
+              </div>
+            ) : null}
+
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>輸出</div>
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  background: "rgba(0,0,0,0.22)",
+                  minHeight: 48,
+                  whiteSpace: "pre-wrap",
+                  fontSize: 13,
+                }}
+              >
+                {testOut || "（尚未測試）"}
+              </div>
             </div>
           </Card>
         </div>
@@ -249,7 +413,7 @@ export default function Home() {
                 lineHeight: 1.5,
               }}
             >
-{JSON.stringify({ status, webhook }, null, 2)}
+              {JSON.stringify({ status, webhook }, null, 2)}
             </pre>
           </Card>
         </div>
