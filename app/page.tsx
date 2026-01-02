@@ -52,7 +52,16 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
         backdropFilter: "blur(10px)",
       }}
     >
-      <div style={{ fontWeight: 900, fontSize: 14, marginBottom: 10, color: "rgba(255,255,255,0.92)" }}>{title}</div>
+      <div
+        style={{
+          fontWeight: 900,
+          fontSize: 14,
+          marginBottom: 10,
+          color: "rgba(255,255,255,0.92)",
+        }}
+      >
+        {title}
+      </div>
       {children}
     </div>
   );
@@ -64,7 +73,9 @@ export default function Home() {
   const [err, setErr] = useState<string>("");
 
   // ✅ 一鍵測試翻譯（不送 LINE）
-  const [pin, setPin] = useState<string>(() => (typeof window === "undefined" ? "" : localStorage.getItem("ADMIN_PIN") || ""));
+  const [pin, setPin] = useState<string>(() =>
+    typeof window === "undefined" ? "" : localStorage.getItem("ADMIN_PIN") || ""
+  );
   const [testInput, setTestInput] = useState("");
   const [testDir, setTestDir] = useState<"auto" | "zh2vi" | "vi2zh">("auto");
   const [testOut, setTestOut] = useState("");
@@ -78,7 +89,10 @@ export default function Home() {
     setErr("");
 
     const ts = Date.now();
-    const init: RequestInit = { cache: "no-store", headers: { "cache-control": "no-store" } };
+    const init: RequestInit = {
+      cache: "no-store",
+      headers: { "cache-control": "no-store" },
+    };
 
     try {
       const r1 = await fetch(`/api/status?ts=${ts}`, init);
@@ -94,7 +108,6 @@ export default function Home() {
       const w = (await r2.json().catch(() => ({}))) as WebhookResp;
       setWebhook(w);
     } catch {
-      // webhook GET 不一定有 JSON（看你實作），失敗也不要緊
       setWebhook({ ok: false, note: "GET /api/line/webhook did not return JSON" });
     } finally {
       setRefreshing(false);
@@ -113,6 +126,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json", "x-admin-pin": pin },
         body: JSON.stringify({ text: testInput, direction: testDir }),
       });
+
       const data = await r.json().catch(() => ({}));
       if (!r.ok || (data as any)?.ok === false) throw new Error((data as any)?.error || `HTTP ${r.status}`);
 
@@ -153,9 +167,19 @@ export default function Home() {
       }}
     >
       <div style={{ maxWidth: 1040, margin: "0 auto", padding: "28px 18px 56px" }}>
-        <div style={{ display: "flex", gap: 14, alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 14,
+            alignItems: "flex-end",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+          }}
+        >
           <div>
-            <div style={{ fontSize: 24, fontWeight: 950, letterSpacing: 0.2 }}>LINE Translate Bot · 狀態頁</div>
+            <div style={{ fontSize: 24, fontWeight: 950, letterSpacing: 0.2 }}>
+              LINE Translate Bot · 狀態頁
+            </div>
             <div style={{ marginTop: 6, fontSize: 13, color: "rgba(255,255,255,0.65)", lineHeight: 1.45 }}>
               這頁只顯示「是否載入成功」，不會顯示任何 Key。<br />
               最重要的：Webhook 活著、Token 有載入、OpenAI 有載入。
@@ -294,12 +318,13 @@ export default function Home() {
           </Card>
         </div>
 
-        {/* ✅ 一鍵測試翻譯 */}
         <div style={{ marginTop: 14 }}>
           <Card title="一鍵測試翻譯（不送 LINE）">
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               <div style={{ flex: 1, minWidth: 240 }}>
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>ADMIN PIN（保護測試 API，避免被外面刷）</div>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>
+                  ADMIN PIN（保護測試 API，避免被外面刷）
+                </div>
                 <input
                   value={pin}
                   onChange={(e) => setPin(e.target.value)}
@@ -430,3 +455,16 @@ export default function Home() {
                 fontSize: 12,
                 lineHeight: 1.5,
               }}
+            >
+              {JSON.stringify({ status, webhook }, null, 2)}
+            </pre>
+          </Card>
+        </div>
+
+        <div style={{ marginTop: 14, fontSize: 12, color: "rgba(255,255,255,0.55)" }}>
+          Tip：如果要讓群組翻譯更貼近生活用語，你就往「家庭詞庫」補：暱稱、口頭禪、醫療/育兒固定用語、常見地點/人物。
+        </div>
+      </div>
+    </main>
+  );
+}
