@@ -3,7 +3,10 @@
 
 function cleanEnv(v?: string) {
   if (!v) return "";
-  return v.trim().replace(/^["']|["']$/g, "");
+  // 重要：移除所有空白/換行/不可見字元 + 去掉兩側引號
+  return v
+    .replace(/\s+/g, "")
+    .replace(/^["']|["']$/g, "");
 }
 
 function normalizeBaseUrl(raw: string) {
@@ -14,7 +17,6 @@ function normalizeBaseUrl(raw: string) {
   u = u.replace(/\/+$/, "");
 
   try {
-    // 這裡不要用 URL 變數名，避免遮蔽全域 URL 類別
     // eslint-disable-next-line no-new
     new globalThis.URL(u);
   } catch {
@@ -37,17 +39,38 @@ function assertEnv() {
   }
 }
 
+function hostOf(url: string) {
+  try {
+    return new globalThis.URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 async function kvFetch(path: string, init?: RequestInit) {
   assertEnv();
 
-  const res = await fetch(`${KV_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${KV_TOKEN}`,
-      ...(init?.headers || {}),
-    },
-    cache: "no-store",
-  });
+  const fullUrl = `${KV_BASE_URL}${path}`;
+
+  let res: Response;
+  try {
+    res = await fetch(fullUrl, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${KV_TOKEN}`,
+        ...(init?.headers || {}),
+      },
+      cache: "no-store",
+    });
+  } catch (err: any) {
+    // 把真正的底層原因吐出來（ENOTFOUND / ECONNRESET / ETIMEDOUT…）
+    const cause = err?.cause;
+    const code = cause?.code || err?.code || "";
+    const msg = cause?.message || err?.message || String(err);
+    throw new Error(
+      `KV fetch failed (${code}): ${msg} | host=${hostOf(KV_BASE_URL)}`
+    );
+  }
 
   const text = await res.text().catch(() => "");
   if (!res.ok) throw new Error(`KV ${res.status}: ${text}`);
