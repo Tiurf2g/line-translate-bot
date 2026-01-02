@@ -1,15 +1,44 @@
 // app/api/_lib/kv.ts
 // REST KV helper: 支援 Vercel KV (KV_REST_*) 與 Upstash (UPSTASH_REDIS_REST_*)
 
-const URL =
-  process.env.KV_REST_API_URL ||
-  process.env.UPSTASH_REDIS_REST_URL ||
-  "";
+function cleanEnv(v?: string) {
+  if (!v) return "";
+  // 去掉前後空白、換行、以及不小心貼上的引號
+  return v.trim().replace(/^["']|["']$/g, "");
+}
 
-const TOKEN =
+function normalizeBaseUrl(raw: string) {
+  let u = cleanEnv(raw);
+  if (!u) return "";
+
+  // 有些人會只貼 domain，補上 https://
+  if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
+
+  // 去掉尾端 /
+  u = u.replace(/\/+$/, "");
+
+  // 驗證 URL 合法（不合法會直接 throw，避免 fetch failed）
+  try {
+    // eslint-disable-next-line no-new
+    new URL(u);
+  } catch {
+    throw new Error(`Invalid KV REST URL: ${u}`);
+  }
+  return u;
+}
+
+const URL =
+  normalizeBaseUrl(
+    process.env.KV_REST_API_URL ||
+      process.env.UPSTASH_REDIS_REST_URL ||
+      ""
+  );
+
+const TOKEN = cleanEnv(
   process.env.KV_REST_API_TOKEN ||
-  process.env.UPSTASH_REDIS_REST_TOKEN ||
-  "";
+    process.env.UPSTASH_REDIS_REST_TOKEN ||
+    ""
+);
 
 function assertEnv() {
   if (!URL || !TOKEN) {
@@ -49,8 +78,6 @@ export async function kvSetRaw(
   value: string,
   opts?: { ex?: number }
 ): Promise<boolean> {
-  // Upstash REST: /set/<key>/<value>
-  // TTL: /set/<key>/<value>?EX=seconds (或 ex=)
   const qs =
     opts?.ex && Number.isFinite(opts.ex)
       ? `?EX=${encodeURIComponent(String(opts.ex))}`
@@ -67,7 +94,6 @@ export async function kvGetJson<T>(key: string): Promise<T | null> {
   const raw = await kvGetRaw(key);
   if (raw == null) return null;
 
-  // 有些情況可能已經是物件，保守處理
   if (typeof raw !== "string") return raw as unknown as T;
 
   try {
