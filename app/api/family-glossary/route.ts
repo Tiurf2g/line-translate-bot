@@ -1,13 +1,13 @@
 // app/api/family-glossary/route.ts
-export const runtime = "nodejs";
+export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
-import { kvGetJson, kvSetJson } from "../_lib/kv";
+import { getKvEnvStatus, kvGetJson, kvSetJson } from "../_lib/kv";
 
 type Entry = {
   zh: string;
   vi?: string;
-  en?: string; // 向下相容舊欄位
+  en?: string; // legacy
   tags?: string[];
   note?: string | null;
 };
@@ -15,130 +15,93 @@ type Entry = {
 type NormEntry = { zh: string; vi: string; tags: string[]; note: string | null };
 
 const KEY = process.env.FAMILY_GLOSSARY_KEY || "family_glossary_v1";
-const ADMIN_PIN = process.env.ADMIN_PIN || process.env.ADMIN_PASS || "";
 
 function normalize(items: Entry[] | null | undefined): NormEntry[] {
   const map = new Map<string, NormEntry>();
   for (const it of items || []) {
     const zh = (it.zh || "").trim();
     const vi = ((it.vi ?? it.en) || "").trim();
-    if (!zh) continue;
-    map.set(zh, {
-      zh,
-      vi,
-      tags: (it.tags || []).map(String).map((t) => t.trim()).filter(Boolean),
-      note: it.note ?? null,
-    });
+    if (!zh || !vi) continue;
+
+    const tags = Array.isArray(it.tags) ? it.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+    const note = it.note == null ? null : String(it.note);
+
+    // merge by zh
+    map.set(zh, { zh, vi, tags, note });
   }
-  return Array.from(map.values());
+  return Array.from(map.values()).sort((a, b) => a.zh.localeCompare(b.zh, "zh-Hant"));
 }
 
-function requirePin(req: Request) {
-  if (!ADMIN_PIN) throw new Error("ADMIN_PIN not set");
-  const pin = req.headers.get("x-admin-pin") || "";
-  if (pin !== ADMIN_PIN) throw new Error("Unauthorized");
-}
+function errToJson(e: any) {
+  const msg = e?.message || String(e);
+  const cause = (e && typeof e === "object" && "cause" in e) ? (e as any).cause : undefined;
+  const causeOut =
+    cause && typeof cause === "object"
+      ? {
+          message: cause.message,
+          code: cause.code,
+          errno: cause.errno,
+          syscall: cause.syscall,
+          address: cause.address,
+          port: cause.port,
+        }
+      : cause
+      ? { message: String(cause) }
+      : null;
 
-async function ensureInit(): Promise<NormEntry[]> {
-  const raw = await kvGetJson<Entry[]>(KEY);
-  if (raw == null) {
-    await kvSetJson(KEY, []);
-    return [];
-  }
-  return normalize(raw);
+  return { message: msg, cause: causeOut };
 }
 
 export async function GET(req: Request) {
-  try {
-    const url = new URL(req.url);
-    const force = url.searchParams.get("force") === "true";
+  const env = getKvEnvStatus();
 
-    const glossary = force
-      ? await ensureInit()
-      : normalize((await kvGetJson<Entry[]>(KEY)) || []);
+  // FAMILY_GLOSSARY_KEY is optional (we default), so不列入 missing_env
+  const missing_env = {
+    KV_REST_API_URL: env.missing.KV_REST_API_URL,
+    KV_REST_API_TOKEN: env.missing.KV_REST_API_TOKEN,
+    FAMILY_GLOSSARY_KEY: false,
+  };
 
-    return Response.json({ ok: true, key: KEY, count: glossary.length, glossary });
-  } catch (e: any) {
+  if (env.missing.KV_REST_API_URL || env.missing.KV_REST_API_TOKEN) {
     return Response.json(
-      {
-        ok: false,
-        error: e?.message || String(e),
-        missing_env: {
-          KV_REST_API_URL: !process.env.KV_REST_API_URL,
-          KV_REST_API_TOKEN: !process.env.KV_REST_API_TOKEN,
-          FAMILY_GLOSSARY_KEY: !process.env.FAMILY_GLOSSARY_KEY,
-        },
-      },
+      { ok: false, error: "Missing KV_REST_API_URL or KV_REST_API_TOKEN", missing_env, kv_host: env.parsed ?? null },
       { status: 500 }
     );
   }
-}
 
-/**
- * POST 支援：
- * - action: "upsert"  entry: {zh, vi, tags?, note?}
- * - action: "import"  entries: Entry[]  mode: "append" | "replace"
- * - action: "reset"
- */
-export async function POST(req: Request) {
+  const u = new URL(req.url);
+  const force = u.searchParams.get("force") === "true";
+
   try {
-    requirePin(req);
+    let raw = await kvGetJson<Entry[]>(KEY);
+    let items = normalize(raw);
 
-    const body = await req.json().catch(() => ({}));
-    const action = String(body?.action || "").toLowerCase();
-
-    if (!action) return Response.json({ ok: false, error: "action required" }, { status: 400 });
-
-    if (action === "reset") {
+    if (force && items.length === 0) {
+      // 初始化空詞庫（避免前端第一次讀不到）
       await kvSetJson(KEY, []);
-      return Response.json({ ok: true, key: KEY, count: 0, glossary: [] });
+      raw = [];
+      items = [];
     }
 
-    if (action === "upsert") {
-      const entry: Entry = body?.entry || {};
-      const zh = (entry.zh || "").trim();
-      const vi = ((entry.vi ?? entry.en) || "").trim();
-
-      if (!zh) return Response.json({ ok: false, error: "entry.zh required" }, { status: 400 });
-
-      const current = await ensureInit();
-      const map = new Map(current.map((x) => [x.zh, x]));
-      map.set(zh, {
-        zh,
-        vi,
-        tags: (entry.tags || []).map(String).map((t) => t.trim()).filter(Boolean),
-        note: entry.note ?? null,
-      });
-
-      const glossary = Array.from(map.values());
-      await kvSetJson(KEY, glossary);
-      return Response.json({ ok: true, key: KEY, count: glossary.length, glossary });
-    }
-
-    if (action === "import") {
-      const mode = String(body?.mode || "append").toLowerCase();
-      const entries: Entry[] = Array.isArray(body?.entries) ? body.entries : [];
-
-      const incoming = normalize(entries);
-
-      if (mode === "replace") {
-        await kvSetJson(KEY, incoming);
-        return Response.json({ ok: true, key: KEY, count: incoming.length, glossary: incoming });
-      }
-
-      const current = await ensureInit();
-      const map = new Map(current.map((x) => [x.zh, x]));
-      for (const it of incoming) map.set(it.zh, it);
-
-      const glossary = Array.from(map.values());
-      await kvSetJson(KEY, glossary);
-      return Response.json({ ok: true, key: KEY, count: glossary.length, glossary });
-    }
-
-    return Response.json({ ok: false, error: `unknown action: ${action}` }, { status: 400 });
+    return Response.json({
+      ok: true,
+      key: KEY,
+      count: items.length,
+      glossary: items,
+      missing_env,
+      kv_host: env.parsed ?? null,
+    });
   } catch (e: any) {
-    const msg = e?.message || String(e);
-    const status = msg === "Unauthorized" ? 401 : 500;
-    return Response.json({ ok: false, error: msg }, { status });
+    const info = errToJson(e);
+    return Response.json(
+      {
+        ok: false,
+        error: info.message || "fetch failed",
+        error_detail: info,
+        missing_env,
+        kv_host: env.parsed ?? null,
+      },
+      { status: 500 }
+    );
   }
 }

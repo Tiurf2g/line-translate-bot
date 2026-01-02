@@ -1,5 +1,4 @@
-// app/api/admin/family-glossary/route.ts
-export const runtime = "nodejs";
+export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
 import { kvGetJson, kvSetJson } from "../../_lib/kv";
