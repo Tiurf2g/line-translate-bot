@@ -1,97 +1,133 @@
-export const runtime = "edge";
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { kvGetJson, kvSetJson } from "../../_lib/kv";
+import { NextResponse } from "next/server";
+import { kvGetJson, kvSetJson, kvHostInfo } from "../../_lib/kv";
 
-type GlossaryEntryRaw = { zh: string; vi?: string; en?: string; tags?: string[]; note?: string | null };
-type GlossaryEntry = { zh: string; vi: string; tags?: string[]; note?: string | null };
+type Entry = { zh: string; vi?: string; en?: string; tags?: string[]; note?: string | null };
+type NormEntry = { zh: string; vi: string; tags: string[]; note: string | null };
 
 const KEY = process.env.FAMILY_GLOSSARY_KEY || "family_glossary_v1";
-const LEGACY_KEY = process.env.FACTORY_GLOSSARY_KEY || "factory_glossary_v1";
+const ADMIN_PIN = process.env.ADMIN_PIN || process.env.ADMIN_PASS || "";
 
-const ADMIN_PIN = process.env.ADMIN_PASS || process.env.ADMIN_PIN || "";
-
-function assertPin(req: Request) {
-  const pin = req.headers.get("x-admin-pin") || "";
-  if (!ADMIN_PIN) throw new Error("ADMIN_PIN not set");
-  if (pin !== ADMIN_PIN) throw new Error("Unauthorized");
-}
-
-function normalize(items: GlossaryEntryRaw[]) {
-  const map = new Map<string, GlossaryEntry>();
+function normalize(items: Entry[] | null | undefined): NormEntry[] {
+  const map = new Map<string, NormEntry>();
   for (const it of items || []) {
-    const zh = (it.zh || "").trim();
-    const vi = ((it.vi ?? it.en) || "").trim();
-    if (!zh) continue;
-    map.set(zh, {
-      zh,
-      vi,
-      tags: (it.tags || []).map(String).map((t) => t.trim()).filter(Boolean),
-      note: it.note ?? null,
-    });
+    const zh = (it?.zh || "").trim();
+    const vi = ((it?.vi || it?.en || "") as string).trim();
+    if (!zh || !vi) continue;
+    const tags = Array.isArray(it.tags) ? it.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+    const note = it.note == null ? null : String(it.note);
+    map.set(zh, { zh, vi, tags, note });
   }
   return Array.from(map.values());
 }
 
-async function readCurrent() {
-  let current = normalize((await kvGetJson<GlossaryEntryRaw[]>(KEY)) || []);
-  // 自動搬 legacy（避免舊資料卡在另一個 key）
-  if (current.length === 0 && LEGACY_KEY && LEGACY_KEY !== KEY) {
-    const legacy = normalize((await kvGetJson<GlossaryEntryRaw[]>(LEGACY_KEY)) || []);
-    if (legacy.length > 0) {
-      await kvSetJson(KEY, legacy);
-      current = legacy;
-    }
+function requireAdmin(req: Request) {
+  if (!ADMIN_PIN) return { ok: false, status: 500, error: "Missing ADMIN_PIN/ADMIN_PASS in env" };
+  const pin = (req.headers.get("x-admin-pin") || "").trim();
+  if (!pin || pin !== ADMIN_PIN) return { ok: false, status: 401, error: "Unauthorized (bad x-admin-pin)" };
+  return null;
+}
+
+async function loadList(): Promise<NormEntry[]> {
+  const cur = await kvGetJson<NormEntry[]>(KEY);
+  return normalize(cur as any);
+}
+
+async function saveList(list: NormEntry[]) {
+  await kvSetJson(KEY, normalize(list as any));
+}
+
+export async function GET(req: Request) {
+  // ✅ 修掉你看到的 HTTP 405：以前只有 POST，前端用 GET 會被 Next 回 405
+  const auth = requireAdmin(req);
+  if (auth) return NextResponse.json(auth, { status: auth.status });
+
+  try {
+    const glossary = await loadList();
+    return NextResponse.json(
+      { ok: true, key: KEY, count: glossary.length, glossary, kv_host: kvHostInfo() },
+      { status: 200 }
+    );
+  } catch (e: any) {
+    const status = e?.status || 500;
+    const msg = e?.message || String(e);
+    return NextResponse.json({ ok: false, error: msg, kv_host: kvHostInfo() }, { status });
   }
-  if ((await kvGetJson(KEY)) === null) await kvSetJson(KEY, []);
-  return current;
 }
 
 export async function POST(req: Request) {
+  const auth = requireAdmin(req);
+  if (auth) return NextResponse.json(auth, { status: auth.status });
+
   try {
-    assertPin(req);
+    const body = (await req.json().catch(() => ({}))) as any;
+    const action = String(body?.action || "list");
 
-    const body = await req.json().catch(() => ({}));
-    const action = String(body?.action || "");
-
-    const current = await readCurrent();
+    if (action === "list") {
+      const glossary = await loadList();
+      return NextResponse.json(
+        { ok: true, key: KEY, count: glossary.length, glossary, kv_host: kvHostInfo() },
+        { status: 200 }
+      );
+    }
 
     if (action === "reset") {
-      await kvSetJson(KEY, []);
-      return Response.json({ ok: true, action, count: 0 });
+      await saveList([]);
+      return NextResponse.json({ ok: true, key: KEY, count: 0, glossary: [], kv_host: kvHostInfo() }, { status: 200 });
     }
 
     if (action === "upsert") {
-      const e = body?.entry || {};
-      const zh = String(e.zh || "").trim();
-      const vi = String(e.vi ?? e.en ?? "").trim(); // 兼容舊欄位 en
-      if (!zh) return Response.json({ ok: false, error: "zh required" }, { status: 400 });
+      const it = body?.entry as Entry;
+      const zh = (it?.zh || "").trim();
+      const vi = ((it?.vi || it?.en || "") as string).trim();
+      if (!zh || !vi) return NextResponse.json({ ok: false, error: "Missing zh/vi" }, { status: 400 });
 
-      const entry: GlossaryEntry = {
-        zh,
-        vi,
-        tags: (e.tags || []).map(String).map((t: string) => t.trim()).filter(Boolean),
-        note: e.note ?? null,
-      };
+      const list = await loadList();
+      const map = new Map(list.map((x) => [x.zh, x] as const));
+      const tags = Array.isArray(it.tags) ? it.tags.map((t: any) => String(t).trim()).filter(Boolean) : [];
+      const note = it.note == null ? null : String(it.note);
+      map.set(zh, { zh, vi, tags, note });
+      const next = Array.from(map.values());
+      await saveList(next);
 
-      const merged = normalize([...current, entry]);
-      await kvSetJson(KEY, merged);
-      return Response.json({ ok: true, action, count: merged.length, entry });
+      return NextResponse.json({ ok: true, key: KEY, count: next.length, glossary: next, kv_host: kvHostInfo() }, { status: 200 });
+    }
+
+    if (action === "delete") {
+      const zh = String(body?.zh || "").trim();
+      if (!zh) return NextResponse.json({ ok: false, error: "Missing zh" }, { status: 400 });
+
+      const list = await loadList();
+      const next = list.filter((x) => x.zh !== zh);
+      await saveList(next);
+      return NextResponse.json({ ok: true, key: KEY, count: next.length, glossary: next, kv_host: kvHostInfo() }, { status: 200 });
     }
 
     if (action === "import") {
-      const mode = body?.mode === "replace" ? "replace" : "append";
-      const items: GlossaryEntryRaw[] = Array.isArray(body?.items) ? body.items : [];
-      const imported = normalize(items);
-      const merged = mode === "replace" ? imported : normalize([...current, ...imported]);
-      await kvSetJson(KEY, merged);
-      return Response.json({ ok: true, action, mode, count: merged.length, imported: imported.length });
+      const mode = String(body?.mode || "append"); // append | replace
+      const items = normalize(body?.items as Entry[]);
+      if (!Array.isArray(items)) return NextResponse.json({ ok: false, error: "items must be array" }, { status: 400 });
+
+      if (mode === "replace") {
+        await saveList(items);
+        return NextResponse.json({ ok: true, key: KEY, count: items.length, glossary: items, kv_host: kvHostInfo() }, { status: 200 });
+      }
+
+      // append (merge by zh)
+      const cur = await loadList();
+      const map = new Map(cur.map((x) => [x.zh, x] as const));
+      for (const it of items) map.set(it.zh, it);
+      const next = Array.from(map.values());
+      await saveList(next);
+      return NextResponse.json({ ok: true, key: KEY, count: next.length, glossary: next, kv_host: kvHostInfo() }, { status: 200 });
     }
 
-    return Response.json({ ok: false, error: "Unknown action" }, { status: 400 });
+    return NextResponse.json({ ok: false, error: `Unknown action: ${action}` }, { status: 400 });
   } catch (e: any) {
+    const status = e?.status || 500;
     const msg = e?.message || String(e);
-    const status = msg === "Unauthorized" ? 401 : 500;
-    return Response.json({ ok: false, error: msg }, { status });
+    return NextResponse.json({ ok: false, error: msg, kv_host: kvHostInfo() }, { status });
   }
 }
