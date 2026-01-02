@@ -53,7 +53,9 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const force = url.searchParams.get("force") === "true";
 
-    const glossary = force ? await ensureInit() : normalize((await kvGetJson<Entry[]>(KEY)) || []);
+    const glossary = force
+      ? await ensureInit()
+      : normalize((await kvGetJson<Entry[]>(KEY)) || []);
 
     return Response.json({ ok: true, key: KEY, count: glossary.length, glossary });
   } catch (e: any) {
@@ -64,8 +66,6 @@ export async function GET(req: Request) {
         missing_env: {
           KV_REST_API_URL: !process.env.KV_REST_API_URL,
           KV_REST_API_TOKEN: !process.env.KV_REST_API_TOKEN,
-          UPSTASH_REDIS_REST_URL: !process.env.UPSTASH_REDIS_REST_URL,
-          UPSTASH_REDIS_REST_TOKEN: !process.env.UPSTASH_REDIS_REST_TOKEN,
           FAMILY_GLOSSARY_KEY: !process.env.FAMILY_GLOSSARY_KEY,
         },
       },
