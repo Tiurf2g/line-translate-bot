@@ -11,16 +11,15 @@ export async function GET() {
     ok: true,
     time: new Date().toISOString(),
     env: {
-      // 只回 true/false，不回任何 key 值
       OPENAI_API_KEY: Boolean(process.env.OPENAI_API_KEY),
       LINE_CHANNEL_ACCESS_TOKEN: Boolean(process.env.LINE_CHANNEL_ACCESS_TOKEN),
       LINE_CHANNEL_SECRET: Boolean(process.env.LINE_CHANNEL_SECRET),
 
-      // ✅ 你現在用的是 Vercel KV（@vercel/kv）
+      // ✅ Vercel KV（@vercel/kv）
       KV_REST_API_URL: Boolean(process.env.KV_REST_API_URL),
       KV_REST_API_TOKEN: Boolean(process.env.KV_REST_API_TOKEN),
 
-      // （可留著：如果你未來又接 Upstash Redis REST 也不會壞）
+      // （可留著：若未來又接 Upstash Redis REST）
       UPSTASH_REDIS_REST_URL: Boolean(process.env.UPSTASH_REDIS_REST_URL),
       UPSTASH_REDIS_REST_TOKEN: Boolean(process.env.UPSTASH_REDIS_REST_TOKEN),
 
@@ -38,7 +37,6 @@ export async function GET() {
     },
   };
 
-  // ✅ 明確禁止 CDN/瀏覽器快取，讓 Refresh 一定看得到 time 變化
   return Response.json(payload, {
     headers: {
       "Cache-Control": "no-store, max-age=0",

@@ -76,6 +76,8 @@ export default function Home() {
   const [pin, setPin] = useState<string>(() =>
     typeof window === "undefined" ? "" : localStorage.getItem("ADMIN_PIN") || ""
   );
+  const [showPin, setShowPin] = useState(false);
+
   const [testInput, setTestInput] = useState("");
   const [testDir, setTestDir] = useState<"auto" | "zh2vi" | "vi2zh">("auto");
   const [testOut, setTestOut] = useState("");
@@ -139,19 +141,27 @@ export default function Home() {
     }
   }
 
+  function clearTest() {
+    setTestInput("");
+    setTestOut("");
+    setTestErr("");
+  }
+
   useEffect(() => {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const env = status?.env || {};
+  const links = status?.links || { webhook: "/api/line/webhook", admin: "/admin/family-glossary" };
+
   const last = useMemo(() => {
     if (!status?.time) return "—";
     const d = new Date(status.time);
     return isNaN(d.getTime()) ? status.time : d.toLocaleString();
   }, [status?.time]);
 
-  const links = status?.links || { webhook: "/api/line/webhook", admin: "/admin/family-glossary" };
+  const showDebug = Boolean(err || testErr);
 
   return (
     <main
@@ -167,6 +177,7 @@ export default function Home() {
       }}
     >
       <div style={{ maxWidth: 1040, margin: "0 auto", padding: "28px 18px 56px" }}>
+        {/* Header */}
         <div
           style={{
             display: "flex",
@@ -177,16 +188,14 @@ export default function Home() {
           }}
         >
           <div>
-            <div style={{ fontSize: 24, fontWeight: 950, letterSpacing: 0.2 }}>
-              LINE Translate Bot · 狀態頁
-            </div>
+            <div style={{ fontSize: 24, fontWeight: 950, letterSpacing: 0.2 }}>LINE Translate Bot · 狀態頁</div>
             <div style={{ marginTop: 6, fontSize: 13, color: "rgba(255,255,255,0.65)", lineHeight: 1.45 }}>
               這頁只顯示「是否載入成功」，不會顯示任何 Key。<br />
               最重要的：Webhook 活著、Token 有載入、OpenAI 有載入。
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <span
               style={{
                 fontSize: 12,
@@ -199,6 +208,24 @@ export default function Home() {
             >
               Last refresh: {last}
             </span>
+
+            {/* ✅ 右上角直接進後台 */}
+            <a
+              href={links.admin || "/admin/family-glossary"}
+              style={{
+                textDecoration: "none",
+                borderRadius: 12,
+                padding: "10px 12px",
+                border: "1px solid rgba(167,139,250,0.38)",
+                background: "rgba(167,139,250,0.14)",
+                color: "rgba(255,255,255,0.95)",
+                fontWeight: 900,
+                fontSize: 13,
+              }}
+            >
+              Open Admin
+            </a>
+
             <button
               type="button"
               onClick={refresh}
@@ -220,6 +247,7 @@ export default function Home() {
           </div>
         </div>
 
+        {/* ✅ 大錯誤條（Status 取不到） */}
         {err ? (
           <div
             style={{
@@ -238,6 +266,7 @@ export default function Home() {
           </div>
         ) : null}
 
+        {/* Status cards */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
           <Card title="核心服務狀態">
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -280,22 +309,6 @@ export default function Home() {
               </a>
 
               <a
-                href={links.admin || "/admin/family-glossary"}
-                style={{
-                  textDecoration: "none",
-                  borderRadius: 12,
-                  padding: "10px 12px",
-                  border: "1px solid rgba(167,139,250,0.38)",
-                  background: "rgba(167,139,250,0.14)",
-                  color: "rgba(255,255,255,0.95)",
-                  fontWeight: 900,
-                  fontSize: 13,
-                }}
-              >
-                Open Admin
-              </a>
-
-              <a
                 href={"/api/family-glossary?force=true"}
                 style={{
                   textDecoration: "none",
@@ -318,42 +331,81 @@ export default function Home() {
           </Card>
         </div>
 
+        {/* ✅ One-click test translate */}
         <div style={{ marginTop: 14 }}>
           <Card title="一鍵測試翻譯（不送 LINE）">
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ flex: 1, minWidth: 240 }}>
+            {/* ✅ 第一排：PIN(含👁) / 翻譯模式 / 測試 / 清除 */}
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                alignItems: "flex-end",
+              }}
+            >
+              {/* PIN + 👁 */}
+              <div style={{ flex: "0 0 320px" }}>
                 <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>
-                  ADMIN PIN（保護測試 API，避免被外面刷）
+                  ADMIN PIN（保護測試 API）
                 </div>
-                <input
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  placeholder="輸入 ADMIN_PIN"
-                  style={{
-                    width: "100%",
-                    padding: "10px 12px",
-                    borderRadius: 12,
-                    border: "1px solid rgba(255,255,255,0.16)",
-                    background: "rgba(0,0,0,0.18)",
-                    color: "rgba(255,255,255,0.92)",
-                    outline: "none",
-                  }}
-                />
+
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type={showPin ? "text" : "password"}
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value)}
+                    placeholder="輸入 ADMIN_PIN"
+                    autoComplete="off"
+                    spellCheck={false}
+                    style={{
+                      width: "100%",
+                      height: 42,
+                      padding: "0 12px",
+                      borderRadius: 12,
+                      border: "1px solid rgba(255,255,255,0.16)",
+                      background: "rgba(0,0,0,0.18)",
+                      color: "rgba(255,255,255,0.92)",
+                      outline: "none",
+                      boxSizing: "border-box",
+                    }}
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => setShowPin((v) => !v)}
+                    title={showPin ? "隱藏 PIN" : "顯示 PIN"}
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: 12,
+                      border: "1px solid rgba(255,255,255,0.18)",
+                      background: "rgba(255,255,255,0.10)",
+                      color: "rgba(255,255,255,0.92)",
+                      fontWeight: 900,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {showPin ? "🙈" : "👁"}
+                  </button>
+                </div>
               </div>
 
-              <div style={{ minWidth: 160 }}>
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>方向</div>
+              {/* 翻譯模式 */}
+              <div style={{ flex: "0 0 180px" }}>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>翻譯模式</div>
                 <select
                   value={testDir}
                   onChange={(e) => setTestDir(e.target.value as any)}
                   style={{
                     width: "100%",
-                    padding: "10px 12px",
+                    height: 42,
+                    padding: "0 12px",
                     borderRadius: 12,
                     border: "1px solid rgba(255,255,255,0.16)",
                     background: "rgba(0,0,0,0.18)",
                     color: "rgba(255,255,255,0.92)",
                     outline: "none",
+                    boxSizing: "border-box",
                   }}
                 >
                   <option value="auto">自動判斷</option>
@@ -362,29 +414,52 @@ export default function Home() {
                 </select>
               </div>
 
-              <div style={{ minWidth: 120 }}>
+              {/* 測試翻譯 */}
+              <div style={{ flex: "0 0 140px" }}>
                 <button
                   type="button"
                   onClick={runTest}
                   disabled={testing}
                   style={{
-                    cursor: testing ? "not-allowed" : "pointer",
                     width: "100%",
+                    height: 42,
+                    cursor: testing ? "not-allowed" : "pointer",
+                    opacity: testing ? 0.65 : 1,
                     borderRadius: 12,
-                    padding: "10px 12px",
                     border: "1px solid rgba(255,255,255,0.18)",
                     background: "rgba(255,255,255,0.10)",
                     color: "rgba(255,255,255,0.92)",
                     fontWeight: 900,
                     fontSize: 13,
-                    opacity: testing ? 0.65 : 1,
                   }}
                 >
                   {testing ? "測試中…" : "測試翻譯"}
                 </button>
               </div>
+
+              {/* ✅ 清除鍵 */}
+              <div style={{ flex: "0 0 110px" }}>
+                <button
+                  type="button"
+                  onClick={clearTest}
+                  style={{
+                    width: "100%",
+                    height: 42,
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.18)",
+                    background: "rgba(255,255,255,0.06)",
+                    color: "rgba(255,255,255,0.85)",
+                    fontWeight: 900,
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >
+                  清除
+                </button>
+              </div>
             </div>
 
+            {/* Input */}
             <div style={{ marginTop: 10 }}>
               <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>輸入</div>
               <textarea
@@ -402,26 +477,12 @@ export default function Home() {
                   outline: "none",
                   resize: "vertical",
                   boxSizing: "border-box",
+                  marginTop: 2,
                 }}
               />
             </div>
 
-            {testErr ? (
-              <div
-                style={{
-                  marginTop: 10,
-                  padding: 10,
-                  borderRadius: 12,
-                  border: "1px solid rgba(251,113,133,0.35)",
-                  background: "rgba(251,113,133,0.12)",
-                  fontSize: 12,
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {testErr}
-              </div>
-            ) : null}
-
+            {/* Output */}
             <div style={{ marginTop: 10 }}>
               <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 6 }}>輸出</div>
               <div
@@ -441,25 +502,48 @@ export default function Home() {
           </Card>
         </div>
 
-        <div style={{ marginTop: 14 }}>
-          <Card title="原始回傳（除錯用）">
-            <pre
-              style={{
-                margin: 0,
-                padding: 12,
-                borderRadius: 14,
-                background: "rgba(0,0,0,0.22)",
-                border: "1px solid rgba(255,255,255,0.10)",
-                overflowX: "auto",
-                color: "rgba(255,255,255,0.86)",
-                fontSize: 12,
-                lineHeight: 1.5,
-              }}
-            >
-              {JSON.stringify({ status, webhook }, null, 2)}
-            </pre>
-          </Card>
-        </div>
+        {/* ✅ Debug: 只有出錯才顯示 */}
+        {showDebug ? (
+          <div style={{ marginTop: 14 }}>
+            <Card title="錯誤資訊（除錯用）">
+              <div
+                style={{
+                  padding: 10,
+                  borderRadius: 12,
+                  border: "1px solid rgba(251,113,133,0.35)",
+                  background: "rgba(251,113,133,0.12)",
+                  fontSize: 12,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {err ? `Status error:\n${err}\n\n` : ""}
+                {testErr ? `Test error:\n${testErr}` : ""}
+              </div>
+
+              <details style={{ marginTop: 10 }}>
+                <summary style={{ cursor: "pointer", fontWeight: 900, color: "rgba(255,255,255,0.85)" }}>
+                  顯示原始回傳（JSON）
+                </summary>
+                <pre
+                  style={{
+                    marginTop: 10,
+                    marginBottom: 0,
+                    padding: 12,
+                    borderRadius: 14,
+                    background: "rgba(0,0,0,0.22)",
+                    border: "1px solid rgba(255,255,255,0.10)",
+                    overflowX: "auto",
+                    color: "rgba(255,255,255,0.86)",
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {JSON.stringify({ status, webhook }, null, 2)}
+                </pre>
+              </details>
+            </Card>
+          </div>
+        ) : null}
 
         <div style={{ marginTop: 14, fontSize: 12, color: "rgba(255,255,255,0.55)" }}>
           Tip：如果要讓群組翻譯更貼近生活用語，你就往「家庭詞庫」補：暱稱、口頭禪、醫療/育兒固定用語、常見地點/人物。
