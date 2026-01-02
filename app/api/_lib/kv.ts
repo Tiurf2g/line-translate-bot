@@ -3,7 +3,6 @@
 
 function cleanEnv(v?: string) {
   if (!v) return "";
-  // 去掉前後空白、換行、以及不小心貼上的引號
   return v.trim().replace(/^["']|["']$/g, "");
 }
 
@@ -11,37 +10,29 @@ function normalizeBaseUrl(raw: string) {
   let u = cleanEnv(raw);
   if (!u) return "";
 
-  // 有些人會只貼 domain，補上 https://
   if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
-
-  // 去掉尾端 /
   u = u.replace(/\/+$/, "");
 
-  // 驗證 URL 合法（不合法會直接 throw，避免 fetch failed）
   try {
+    // 這裡不要用 URL 變數名，避免遮蔽全域 URL 類別
     // eslint-disable-next-line no-new
-    new URL(u);
+    new globalThis.URL(u);
   } catch {
     throw new Error(`Invalid KV REST URL: ${u}`);
   }
   return u;
 }
 
-const URL =
-  normalizeBaseUrl(
-    process.env.KV_REST_API_URL ||
-      process.env.UPSTASH_REDIS_REST_URL ||
-      ""
-  );
+const KV_BASE_URL = normalizeBaseUrl(
+  process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || ""
+);
 
-const TOKEN = cleanEnv(
-  process.env.KV_REST_API_TOKEN ||
-    process.env.UPSTASH_REDIS_REST_TOKEN ||
-    ""
+const KV_TOKEN = cleanEnv(
+  process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || ""
 );
 
 function assertEnv() {
-  if (!URL || !TOKEN) {
+  if (!KV_BASE_URL || !KV_TOKEN) {
     throw new Error("Missing KV_REST_API_URL or KV_REST_API_TOKEN");
   }
 }
@@ -49,10 +40,10 @@ function assertEnv() {
 async function kvFetch(path: string, init?: RequestInit) {
   assertEnv();
 
-  const res = await fetch(`${URL}${path}`, {
+  const res = await fetch(`${KV_BASE_URL}${path}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${TOKEN}`,
+      Authorization: `Bearer ${KV_TOKEN}`,
       ...(init?.headers || {}),
     },
     cache: "no-store",
