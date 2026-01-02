@@ -1,12 +1,6 @@
 // app/api/_lib/kv.ts
 import { kv } from "@vercel/kv";
 
-/**
- * Vercel KV helper (最穩版本)
- * - 不再自己手刻 REST fetch，避免「fetch failed」
- * - 直接透過 @vercel/kv 存取
- */
-
 export async function kvGetRaw(key: string): Promise<string | null> {
   const v = await kv.get<string>(key);
   if (v === null || v === undefined) return null;
