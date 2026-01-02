@@ -1,19 +1,26 @@
 // app/api/_lib/kv.ts
-// Upstash Redis REST KV helper
-// 只放工具函式，不要放 route handler，也不要 import 自己
+// REST KV helper: 支援 Vercel KV (KV_REST_*) 與 Upstash (UPSTASH_REDIS_REST_*)
 
-const URL = process.env.UPSTASH_REDIS_REST_URL || "";
-const TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN || "";
+const URL =
+  process.env.KV_REST_API_URL ||
+  process.env.UPSTASH_REDIS_REST_URL ||
+  "";
+
+const TOKEN =
+  process.env.KV_REST_API_TOKEN ||
+  process.env.UPSTASH_REDIS_REST_TOKEN ||
+  "";
 
 function assertEnv() {
   if (!URL || !TOKEN) {
-    throw new Error("Missing UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN");
+    throw new Error("Missing KV_REST_API_URL or KV_REST_API_TOKEN");
   }
 }
 
-async function upstashFetch(path: string, init?: RequestInit) {
+async function kvFetch(path: string, init?: RequestInit) {
   assertEnv();
-  const r = await fetch(`${URL}${path}`, {
+
+  const res = await fetch(`${URL}${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${TOKEN}`,
@@ -22,8 +29,8 @@ async function upstashFetch(path: string, init?: RequestInit) {
     cache: "no-store",
   });
 
-  const text = await r.text().catch(() => "");
-  if (!r.ok) throw new Error(`Upstash ${r.status}: ${text}`);
+  const text = await res.text().catch(() => "");
+  if (!res.ok) throw new Error(`KV ${res.status}: ${text}`);
 
   try {
     return JSON.parse(text);
@@ -33,15 +40,26 @@ async function upstashFetch(path: string, init?: RequestInit) {
 }
 
 export async function kvGetRaw(key: string): Promise<string | null> {
-  const data = await upstashFetch(`/get/${encodeURIComponent(key)}`);
+  const data = await kvFetch(`/get/${encodeURIComponent(key)}`);
   return data?.result ?? null;
 }
 
-export async function kvSetRaw(key: string, value: string): Promise<boolean> {
+export async function kvSetRaw(
+  key: string,
+  value: string,
+  opts?: { ex?: number }
+): Promise<boolean> {
   // Upstash REST: /set/<key>/<value>
-  await upstashFetch(`/set/${encodeURIComponent(key)}/${encodeURIComponent(value)}`, {
-    method: "POST",
-  });
+  // TTL: /set/<key>/<value>?EX=seconds (或 ex=)
+  const qs =
+    opts?.ex && Number.isFinite(opts.ex)
+      ? `?EX=${encodeURIComponent(String(opts.ex))}`
+      : "";
+
+  await kvFetch(
+    `/set/${encodeURIComponent(key)}/${encodeURIComponent(value)}${qs}`,
+    { method: "POST" }
+  );
   return true;
 }
 
@@ -49,6 +67,7 @@ export async function kvGetJson<T>(key: string): Promise<T | null> {
   const raw = await kvGetRaw(key);
   if (raw == null) return null;
 
+  // 有些情況可能已經是物件，保守處理
   if (typeof raw !== "string") return raw as unknown as T;
 
   try {
@@ -58,6 +77,10 @@ export async function kvGetJson<T>(key: string): Promise<T | null> {
   }
 }
 
-export async function kvSetJson(key: string, value: any): Promise<boolean> {
-  return kvSetRaw(key, JSON.stringify(value));
+export async function kvSetJson(
+  key: string,
+  value: any,
+  opts?: { ex?: number }
+): Promise<boolean> {
+  return kvSetRaw(key, JSON.stringify(value), opts);
 }
