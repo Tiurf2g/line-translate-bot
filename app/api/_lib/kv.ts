@@ -48,7 +48,8 @@ function getClient() {
   }
 
   // Disable auto-deserialization so we control JSON parsing ourselves.
-  // (Some setups have reported surprising nulls when relying on generic deserialization.)
+  // (Some setups have reported surprising nulls when relying on
+  // generic deserialization.)
   return createClient({
     url,
     token,
@@ -81,4 +82,9 @@ export async function kvGetJson<T = any>(key: string): Promise<T | null> {
 
 export async function kvSetJson(key: string, value: unknown): Promise<void> {
   await kvSetRaw(key, JSON.stringify(value));
+}
+
+// Safe KV host info for debugging (no secrets)
+export function kvHostInfo() {
+  return getKvEnvStatus().parsed || null;
 }

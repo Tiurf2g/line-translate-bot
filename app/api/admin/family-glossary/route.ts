@@ -14,29 +14,32 @@ function normalize(items: Entry[] | null | undefined): NormEntry[] {
   const map = new Map<string, NormEntry>();
   for (const it of items || []) {
     const zh = (it?.zh || "").trim();
-    const vi = ((it?.vi || it?.en || "") as string).trim();
-    if (!zh || !vi) continue;
-    const tags = Array.isArray(it.tags) ? it.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+    if (!zh) continue;
+    const vi = (it?.vi || it?.en || "").trim(); // fallback
+    const tags = Array.isArray(it?.tags) ? it.tags.map((t) => String(t).trim()).filter(Boolean) : [];
     const note = it.note == null ? null : String(it.note);
     map.set(zh, { zh, vi, tags, note });
   }
   return Array.from(map.values());
 }
 
-function requireAdmin(req: Request) {
-  if (!ADMIN_PIN) return { ok: false, status: 500, error: "Missing ADMIN_PIN/ADMIN_PASS in env" };
-  const pin = (req.headers.get("x-admin-pin") || "").trim();
-  if (!pin || pin !== ADMIN_PIN) return { ok: false, status: 401, error: "Unauthorized (bad x-admin-pin)" };
-  return null;
-}
-
 async function loadList(): Promise<NormEntry[]> {
-  const cur = await kvGetJson<NormEntry[]>(KEY);
-  return normalize(cur as any);
+  const v = await kvGetJson<any>(KEY);
+  if (!v) return [];
+  if (Array.isArray(v)) return normalize(v as Entry[]);
+  if (typeof v === "object" && Array.isArray((v as any).glossary)) return normalize((v as any).glossary);
+  return [];
 }
 
 async function saveList(list: NormEntry[]) {
-  await kvSetJson(KEY, normalize(list as any));
+  await kvSetJson(KEY, list);
+}
+
+function requireAdmin(req: Request) {
+  const pin = (req.headers.get("x-admin-pin") || "").trim();
+  if (!ADMIN_PIN) return { ok: false, error: "Server missing ADMIN_PIN", status: 500 };
+  if (!pin || pin !== ADMIN_PIN) return { ok: false, error: "Invalid ADMIN PIN", status: 401 };
+  return null;
 }
 
 export async function GET(req: Request) {
@@ -62,8 +65,8 @@ export async function POST(req: Request) {
   if (auth) return NextResponse.json(auth, { status: auth.status });
 
   try {
-    const body = (await req.json().catch(() => ({}))) as any;
-    const action = String(body?.action || "list");
+    const body = await req.json().catch(() => ({}));
+    const action = String(body?.action || "").trim();
 
     if (action === "list") {
       const glossary = await loadList();
@@ -79,19 +82,14 @@ export async function POST(req: Request) {
     }
 
     if (action === "upsert") {
-      const it = body?.entry as Entry;
-      const zh = (it?.zh || "").trim();
-      const vi = ((it?.vi || it?.en || "") as string).trim();
-      if (!zh || !vi) return NextResponse.json({ ok: false, error: "Missing zh/vi" }, { status: 400 });
+      const it = body?.item as Entry;
+      const zh = String(it?.zh || "").trim();
+      if (!zh) return NextResponse.json({ ok: false, error: "Missing zh" }, { status: 400 });
 
-      const list = await loadList();
-      const map = new Map(list.map((x) => [x.zh, x] as const));
-      const tags = Array.isArray(it.tags) ? it.tags.map((t: any) => String(t).trim()).filter(Boolean) : [];
-      const note = it.note == null ? null : String(it.note);
-      map.set(zh, { zh, vi, tags, note });
-      const next = Array.from(map.values());
+      const cur = await loadList();
+      const norm = normalize([it])[0];
+      const next = [norm, ...cur.filter((x) => x.zh !== zh)];
       await saveList(next);
-
       return NextResponse.json({ ok: true, key: KEY, count: next.length, glossary: next, kv_host: kvHostInfo() }, { status: 200 });
     }
 
@@ -99,26 +97,25 @@ export async function POST(req: Request) {
       const zh = String(body?.zh || "").trim();
       if (!zh) return NextResponse.json({ ok: false, error: "Missing zh" }, { status: 400 });
 
-      const list = await loadList();
-      const next = list.filter((x) => x.zh !== zh);
+      const cur = await loadList();
+      const next = cur.filter((x) => x.zh !== zh);
       await saveList(next);
       return NextResponse.json({ ok: true, key: KEY, count: next.length, glossary: next, kv_host: kvHostInfo() }, { status: 200 });
     }
 
     if (action === "import") {
-      const mode = String(body?.mode || "append"); // append | replace
-      const items = normalize(body?.items as Entry[]);
-      if (!Array.isArray(items)) return NextResponse.json({ ok: false, error: "items must be array" }, { status: 400 });
+      const mode = String(body?.mode || "append").trim(); // append | replace
+      const incoming = normalize(Array.isArray(body?.items) ? body.items : []);
 
       if (mode === "replace") {
-        await saveList(items);
-        return NextResponse.json({ ok: true, key: KEY, count: items.length, glossary: items, kv_host: kvHostInfo() }, { status: 200 });
+        await saveList(incoming);
+        return NextResponse.json({ ok: true, key: KEY, count: incoming.length, glossary: incoming, kv_host: kvHostInfo() }, { status: 200 });
       }
 
-      // append (merge by zh)
+      // append: incoming 覆蓋既有同 zh
       const cur = await loadList();
       const map = new Map(cur.map((x) => [x.zh, x] as const));
-      for (const it of items) map.set(it.zh, it);
+      for (const it of incoming) map.set(it.zh, it);
       const next = Array.from(map.values());
       await saveList(next);
       return NextResponse.json({ ok: true, key: KEY, count: next.length, glossary: next, kv_host: kvHostInfo() }, { status: 200 });
