@@ -25,6 +25,7 @@ const TW_TO_VN_PROMPT = `你是一位住在台灣多年的越南人，
 - 可以使用越南人常用的語助詞（如：ừ、ờ、uh、ha、nè、á）
 - 適度使用年輕人或家庭常見說法
 - 不要書面、不要正式、不要像新聞或課本
+- 短句也要照原意翻，不要自己補人物、原因或前後文
 - 不要加解釋，只輸出翻譯內容
 `;
 
@@ -36,6 +37,10 @@ const VN_TO_TW_PROMPT = `你是一位很懂越南文化的台灣人，
 - 可以出現「嗯、喔、啊、欸、啦、耶」等口語語氣
 - 翻成自然、不刺耳、不生硬的生活中文
 - 不要太完整句、不要像作文
+- 不要把短句亂補成問句或推測句
+- 越南文的 "con" 在家庭對話常指「孩子、寶寶」或晚輩自稱，除非原文真的問 "ai"，不要翻成「誰」
+- "cho con ngủ" 這類句子通常是「讓孩子睡／哄孩子睡」，不是給孩子睡
+- "đã rồi" 常是「等...之後再...」，不要直接翻成「已經...了」
 
 重要規則（台灣在地用語）：
 - "thẻ bảo hiểm y tế" 一律翻成「健保卡」
@@ -57,22 +62,27 @@ const DIRECT_TRANSLATE_PROMPT = `你是一個【中文 ↔ 越南文】專用翻
 // =========================
 // Language helpers (same as webhook.py)
 // =========================
-const VN_MARKS = new Set(Array.from("ăâêôơưđĂÂÊÔƠƯĐ"));
+const VN_MARKS = new Set(
+  Array.from(
+    "ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵĂÂĐÊÔƠƯÁÀẢÃẠẤẦẨẪẬẮẰẲẴẶÉÈẺẼẸẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌỐỒỔỖỘỚỜỞỠỢÚÙỦŨỤỨỪỬỮỰÝỲỶỸỴ"
+  )
+);
 
 const URL_PATTERN = /(https?:\/\/|www\.|line\.me\/|liff\.line\.me\/)/i; // :contentReference[oaicite:1]{index=1}
 
 const FILLER_MAP_TW_TO_VN: Record<string, string> = {
-  "嗯": "Uh",
-  "嗯嗯": "Uh uh",
+  "嗯": "Ừ",
+  "嗯嗯": "Ừ ừ",
   "喔": "Ờ",
   "哦": "Ờ",
   "啊": "À",
 };
 
-const VN_FILLERS = new Set(["uh", "ừ", "ờ", "ha", "nè", "á", "a", "à", "ừm", "um", "ừm ừm"]); // :contentReference[oaicite:2]{index=2}
+const VN_FILLERS = new Set(["uh", "ư", "ừ", "ờ", "ha", "nè", "á", "a", "à", "ừm", "um", "ừm ừm"]); // :contentReference[oaicite:2]{index=2}
 
 const FILLER_MAP_VN_TO_TW: Record<string, string> = {
   "uh": "嗯",
+  "ư": "嗯？",
   "ừ": "嗯",
   "ờ": "喔",
   "ha": "哈",
@@ -83,6 +93,88 @@ const FILLER_MAP_VN_TO_TW: Record<string, string> = {
   "ừm": "嗯",
 };
 
+const PHRASE_MAP_VN_TO_TW: Record<string, string> = {
+  "con uh": "寶寶喔？",
+  "con u": "寶寶喔？",
+  "con ư": "寶寶喔？",
+  "con à": "寶寶喔？",
+  "khong hieu": "不懂。",
+  "không hiểu": "不懂。",
+  "dang noi ve cai gi vay": "在說什麼？",
+  "đang nói về cái gì vậy": "在說什麼？",
+  "toi cho con ngu": "我先讓孩子睡。",
+  "tôi cho con ngủ": "我先讓孩子睡。",
+  "con ngu say da roi ra ngoai": "等孩子睡熟了再出去。",
+  "con ngủ say đã rồi ra ngoài": "等孩子睡熟了再出去。",
+};
+
+const PHRASE_MAP_TW_TO_VN: Record<string, string> = {
+  "去睡覺吧": "Đi ngủ đi.",
+  "不懂": "Không hiểu.",
+  "在說什麼": "Đang nói về cái gì vậy?",
+  "在說什麼？": "Đang nói về cái gì vậy?",
+  "可以": "Được.",
+};
+
+const VN_COMMON_WORDS = new Set([
+  "ai",
+  "anh",
+  "ba",
+  "be",
+  "bé",
+  "cai",
+  "cái",
+  "cho",
+  "con",
+  "da",
+  "đã",
+  "dang",
+  "đang",
+  "di",
+  "đi",
+  "duoc",
+  "được",
+  "em",
+  "gi",
+  "gì",
+  "hieu",
+  "hiểu",
+  "khong",
+  "không",
+  "me",
+  "mẹ",
+  "ngu",
+  "ngủ",
+  "noi",
+  "nói",
+  "ra",
+  "roi",
+  "rồi",
+  "say",
+  "toi",
+  "tôi",
+  "ve",
+  "về",
+  "vay",
+  "vậy",
+]);
+
+function normalizePhrase(text: string) {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[?!！？。,.，、]+$/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function stripVietnameseMarks(text: string) {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D");
+}
+
 function isVietnamese(text: string): boolean {
   const t = (text || "").trim().toLowerCase();
   // Uh 也算越南語助詞 :contentReference[oaicite:3]{index=3}
@@ -90,6 +182,17 @@ function isVietnamese(text: string): boolean {
   for (const ch of text || "") {
     if (VN_MARKS.has(ch)) return true;
   }
+
+  const words = stripVietnameseMarks(t)
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) return false;
+
+  const vnWordCount = words.filter((w) => VN_COMMON_WORDS.has(w)).length;
+  if (vnWordCount >= 2) return true;
+  if (words.length <= 3 && vnWordCount >= 1 && words.some((w) => VN_FILLERS.has(w))) return true;
+
   return false;
 }
 
@@ -190,8 +293,14 @@ async function translateText(text: string, event: any): Promise<string> {
   if (t.startsWith("🇹🇼") || t.startsWith("🇻🇳")) return "";
 
   // 1) 語助詞硬規則：優先處理 :contentReference[oaicite:14]{index=14}
-  if (!isVietnamese(t) && FILLER_MAP_TW_TO_VN[t]) return FILLER_MAP_TW_TO_VN[t];
   const low = t.toLowerCase();
+  const phrase = normalizePhrase(t);
+  const phraseNoMarks = stripVietnameseMarks(phrase);
+
+  if (PHRASE_MAP_TW_TO_VN[t]) return PHRASE_MAP_TW_TO_VN[t];
+  if (!isVietnamese(t) && FILLER_MAP_TW_TO_VN[t]) return FILLER_MAP_TW_TO_VN[t];
+  if (PHRASE_MAP_VN_TO_TW[phrase]) return PHRASE_MAP_VN_TO_TW[phrase];
+  if (PHRASE_MAP_VN_TO_TW[phraseNoMarks]) return PHRASE_MAP_VN_TO_TW[phraseNoMarks];
   if (isVietnamese(t) && FILLER_MAP_VN_TO_TW[low]) return FILLER_MAP_VN_TO_TW[low];
 
   // 2) 模式選擇：家庭/非家庭 :contentReference[oaicite:15]{index=15}

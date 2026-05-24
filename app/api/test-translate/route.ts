@@ -11,6 +11,45 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
 const ADMIN_PIN = process.env.ADMIN_PIN || process.env.ADMIN_PASS || "";
 
+const PHRASE_MAP_VN_TO_TW: Record<string, string> = {
+  "con uh": "寶寶喔？",
+  "con u": "寶寶喔？",
+  "con ư": "寶寶喔？",
+  "con à": "寶寶喔？",
+  "khong hieu": "不懂。",
+  "không hiểu": "不懂。",
+  "dang noi ve cai gi vay": "在說什麼？",
+  "đang nói về cái gì vậy": "在說什麼？",
+  "toi cho con ngu": "我先讓孩子睡。",
+  "tôi cho con ngủ": "我先讓孩子睡。",
+  "con ngu say da roi ra ngoai": "等孩子睡熟了再出去。",
+  "con ngủ say đã rồi ra ngoài": "等孩子睡熟了再出去。",
+};
+
+const PHRASE_MAP_TW_TO_VN: Record<string, string> = {
+  "去睡覺吧": "Đi ngủ đi.",
+  "不懂": "Không hiểu.",
+  "在說什麼": "Đang nói về cái gì vậy?",
+  "在說什麼？": "Đang nói về cái gì vậy?",
+  "可以": "Được.",
+};
+
+function normalizePhrase(text: string) {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[?!！？。,.，、]+$/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function stripVietnameseMarks(text: string) {
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D");
+}
+
 function pickDirection(text: string): "zh2vi" | "vi2zh" {
   // 粗略偵測：有中日韓字 → zh2vi；否則當 vi2zh
   const hasCJK = /[\u4E00-\u9FFF]/.test(text);
@@ -84,6 +123,25 @@ export async function POST(req: Request) {
 
     const finalDir = direction === "auto" ? pickDirection(text) : direction;
 
+    const phrase = normalizePhrase(text);
+    const phraseNoMarks = stripVietnameseMarks(phrase);
+    const hardCoded =
+      finalDir === "zh2vi"
+        ? PHRASE_MAP_TW_TO_VN[text] || PHRASE_MAP_TW_TO_VN[phrase]
+        : PHRASE_MAP_VN_TO_TW[phrase] || PHRASE_MAP_VN_TO_TW[phraseNoMarks];
+
+    if (hardCoded) {
+      return Response.json({
+        ok: true,
+        direction: finalDir,
+        ms: 0,
+        input: text,
+        output: hardCoded,
+        glossary_count: 0,
+        hard_rule: true,
+      });
+    }
+
     const rawGlossary = await kvGetJson<any>(GLOSSARY_KEY);
     const glossary = normalizeGlossary(rawGlossary);
 
@@ -95,20 +153,27 @@ export async function POST(req: Request) {
 
     const system =
       finalDir === "zh2vi"
-        ? `You are a STRICT translator. Translate Traditional Chinese to Vietnamese.
+        ? `You are a STRICT translator for family LINE messages. Translate Traditional Chinese to Vietnamese.
 Rules:
 - Translate exactly, do NOT paraphrase.
 - Keep punctuation and numbers.
 - If unclear/inaudible, output exactly: [UNSURE]
 - Use glossary terms when they match.
+- Use natural Vietnamese family wording, not textbook or news style.
+- Do not invent people, reasons, or context for short messages.
 Glossary:
 ${glossaryLines}`
-        : `You are a STRICT translator. Translate Vietnamese to Traditional Chinese.
+        : `You are a STRICT translator for family LINE messages. Translate Vietnamese to Traditional Chinese.
 Rules:
 - Translate exactly, do NOT paraphrase.
 - Keep punctuation and numbers.
 - If unclear/inaudible, output exactly: [UNSURE]
 - Use glossary terms when they match.
+- Use natural Taiwanese family wording, not formal writing.
+- Do not invent questions or context for short messages.
+- Vietnamese "con" often means child/baby or a junior family member's self-reference; unless the source says "ai", do not translate it as "誰".
+- "cho con ngủ" usually means "讓孩子睡／哄孩子睡".
+- "đã rồi" often means "等...之後再...".
 Glossary:
 ${glossaryLines}`;
 
